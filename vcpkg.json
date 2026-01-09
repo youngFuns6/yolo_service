@@ -1,0 +1,23 @@
+{
+  "name": "detector-service",
+  "version": "0.1.0",
+  "dependencies": [
+    "crow",
+    "zlib",
+    "sqlite3",
+    "onnxruntime",
+    "nlohmann-json",
+    {
+      "name": "ffmpeg",
+      "features": [
+        "x264"
+      ]
+    },
+    {
+      "name": "opencv4",
+      "features": [
+        "ffmpeg"
+      ]
+    }
+  ]
+}
