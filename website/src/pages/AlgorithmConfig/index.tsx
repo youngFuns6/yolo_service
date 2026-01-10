@@ -46,6 +46,8 @@ function AlgorithmConfigPage() {
   const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState(false);
   const [channelName, setChannelName] = useState("");
+  const [channelWidth, setChannelWidth] = useState(1920);
+  const [channelHeight, setChannelHeight] = useState(1080);
   const [isDefault, setIsDefault] = useState(false);
   const [models, setModels] = useState<Model[]>([]);
   const [classes, setClasses] = useState<ClassInfo[]>([]);
@@ -67,10 +69,14 @@ function AlgorithmConfigPage() {
       .then(([channelResponse, configResponse]) => {
         if (channelResponse.success && channelResponse.channel) {
           setChannelName(channelResponse.channel.name);
+          setChannelWidth(channelResponse.channel.width || 1920);
+          setChannelHeight(channelResponse.channel.height || 1080);
         }
 
         if (configResponse.success && configResponse.data) {
           setIsDefault(false);
+          // ROI坐标在数据库中存储为归一化坐标（0-1之间）
+          // 这里直接使用，因为前端显示时不需要转换（除非在画布上绘制）
           setRois(configResponse.data.rois || []);
           setAlertRules(configResponse.data.alert_rules || []);
           // 将 enabled_classes 数组转换为数字数组（用于Select）
@@ -158,6 +164,31 @@ function AlgorithmConfigPage() {
     // enabled_classes 已经是数字数组
     const enabledClasses = (values.enabled_classes || []).filter((id: number) => id >= 0);
 
+    // 将ROI坐标归一化（如果坐标大于1，说明是像素坐标，需要归一化）
+    // 使用input_width和input_height作为参考尺寸
+    const normalizedRois = rois.map((roi) => {
+      const refWidth = values.input_width || channelWidth;
+      const refHeight = values.input_height || channelHeight;
+      
+      return {
+        ...roi,
+        points: roi.points.map((point) => {
+          // 如果坐标大于1，假设是像素坐标，进行归一化
+          // 否则，假设已经是归一化坐标，直接使用
+          let normX = point.x;
+          let normY = point.y;
+          if (point.x > 1.0 || point.y > 1.0) {
+            normX = point.x / refWidth;
+            normY = point.y / refHeight;
+          }
+          // 确保归一化坐标在0-1范围内
+          normX = Math.max(0, Math.min(1, normX));
+          normY = Math.max(0, Math.min(1, normY));
+          return { x: normX, y: normY };
+        }),
+      };
+    });
+
     const params: UpdateAlgorithmConfigParams = {
       model_path: values.model_path,
       conf_threshold: values.conf_threshold,
@@ -166,7 +197,7 @@ function AlgorithmConfigPage() {
       input_height: values.input_height,
       detection_interval: values.detection_interval,
       enabled_classes: enabledClasses,
-      rois: rois,
+      rois: normalizedRois,
       alert_rules: alertRules,
     };
 
@@ -474,7 +505,15 @@ function AlgorithmConfigPage() {
                         </div>
                         {roi.points && roi.points.length > 0 && (
                           <div style={{ fontSize: 12, color: "#999" }}>
-                            坐标点: {roi.points.map((p) => `(${p.x}, ${p.y})`).join(", ")}
+                            坐标点（归一化）: {roi.points.map((p) => {
+                              // 显示归一化坐标（0-1之间）
+                              const displayX = p.x > 1 ? (p.x / (form.getFieldValue("input_width") || channelWidth)).toFixed(3) : p.x.toFixed(3);
+                              const displayY = p.y > 1 ? (p.y / (form.getFieldValue("input_height") || channelHeight)).toFixed(3) : p.y.toFixed(3);
+                              return `(${displayX}, ${displayY})`;
+                            }).join(", ")}
+                            <div style={{ fontSize: 11, color: "#999", marginTop: 4 }}>
+                              提示: ROI坐标已归一化（0-1之间），可适配不同分辨率的视频流
+                            </div>
                           </div>
                         )}
                       </Space>
