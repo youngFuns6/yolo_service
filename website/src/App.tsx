@@ -8,14 +8,6 @@ const App = () => {
   }
 
   return (
-    <div
-      id="test-pro-layout"
-      style={{
-        width: "100vw",
-        height: "100vh",
-        overflow: "auto",
-      }}
-    >
       <ProConfigProvider hashed={false}>
         <ConfigProvider>
           <AntApp style={{ height: "100%" }}>
@@ -23,7 +15,6 @@ const App = () => {
           </AntApp>
         </ConfigProvider>
       </ProConfigProvider>
-    </div>
   );
 };
 

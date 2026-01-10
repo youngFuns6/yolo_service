@@ -5,6 +5,9 @@ import path from 'path'
 // https://vite.dev/config/
 export default defineConfig({
   plugins: [react()],
+  build: {
+    outDir: path.resolve(__dirname, '../build/macos-arm64-Release/website'),
+  },
   resolve: {
     alias: {
       '@': path.resolve(__dirname, 'src')
@@ -13,11 +16,14 @@ export default defineConfig({
   css: {
     preprocessorOptions: {
       scss: {
-        additionalData: '@import "@/assets/css/global.scss";',
+        additionalData: '@use "@/assets/css/global.scss" as *;',
       },
       less: {
         javascriptEnabled: true,
       },
+    },
+    lightningcss: {
+      errorRecovery: true,
     },
   },
 })

@@ -18,7 +18,9 @@ import {
   FaEdit,
   FaTrash,
   FaEye,
+  FaCog,
 } from "react-icons/fa";
+import { useNavigate } from "react-router-dom";
 import wsManager, { type WebSocketMessage } from "@/utils/websocket";
 import {
   getChannelList,
@@ -32,6 +34,7 @@ import {
 } from "@/api/channel";
 
 function ChannelList() {
+  const navigate = useNavigate();
   const [channels, setChannels] = useState<Channel[]>([]);
   const [loading, setLoading] = useState(false);
   const [modalVisible, setModalVisible] = useState(false);
@@ -87,6 +90,7 @@ function ChannelList() {
       source_url: values.source_url,
       enabled: values.enabled ?? true,
       push_enabled: values.push_enabled ?? false,
+      report_enabled: values.report_enabled ?? false,
     };
 
     // 如果指定了id，添加到参数中
@@ -168,6 +172,30 @@ function ChannelList() {
       .catch((error) => {
         console.error("切换推流开关失败:", error);
         message.error(checked ? "开启推流失败" : "关闭推流失败");
+        // 如果失败，重新加载以恢复原状态
+        loadChannels();
+      });
+  }
+
+  // 切换上报开关
+  function handleReportToggle(channelId: number, checked: boolean) {
+    const channel = channels.find((ch) => ch.id === channelId);
+    if (!channel) return;
+
+    updateChannel(channelId, { report_enabled: checked })
+      .then((response) => {
+        if (response.success) {
+          message.success(checked ? "开启上报成功" : "关闭上报成功");
+          loadChannels();
+        } else {
+          message.error(response.error || (checked ? "开启上报失败" : "关闭上报失败"));
+          // 如果失败，重新加载以恢复原状态
+          loadChannels();
+        }
+      })
+      .catch((error) => {
+        console.error("切换上报开关失败:", error);
+        message.error(checked ? "开启上报失败" : "关闭上报失败");
         // 如果失败，重新加载以恢复原状态
         loadChannels();
       });
@@ -320,6 +348,21 @@ function ChannelList() {
       ),
     },
     {
+      title: "上报开关",
+      dataIndex: "report_enabled",
+      key: "report_enabled",
+      width: 100,
+      render: (reportEnabled: boolean, record: Channel) => (
+        <Switch
+          checked={reportEnabled}
+          onChange={(checked) => handleReportToggle(record.id, checked)}
+          disabled={!record.enabled}
+          checkedChildren="开"
+          unCheckedChildren="关"
+        />
+      ),
+    },
+    {
       title: "创建时间",
       dataIndex: "created_at",
       key: "created_at",
@@ -328,10 +371,10 @@ function ChannelList() {
     {
       title: "操作",
       key: "action",
-      width: 240,
+      width: 380,
       fixed: "right",
       render: (_, record) => (
-        <Space size="small">
+        <Space size={0}>
           <Button
             type="link"
             icon={<FaEye />}
@@ -346,6 +389,13 @@ function ChannelList() {
             onClick={() => handleOpenModal(record)}
           >
             编辑
+          </Button>
+          <Button
+            type="link"
+            icon={<FaCog />}
+            onClick={() => navigate(`/channel/algorithm/${record.id}`)}
+          >
+            算法配置
           </Button>
           <Popconfirm
             title="确定要删除此通道吗？"
@@ -403,10 +453,12 @@ function ChannelList() {
                 source_url: editingChannel.source_url,
                 enabled: editingChannel.enabled,
                 push_enabled: editingChannel.push_enabled,
+                report_enabled: editingChannel.report_enabled ?? false,
               }
             : {
                 enabled: true,
                 push_enabled: false,
+                report_enabled: false,
               }
         }
       >
@@ -440,6 +492,11 @@ function ChannelList() {
           name="push_enabled"
           label="推送开关"
           tooltip="是否启用推流功能"
+        />
+        <ProFormSwitch
+          name="report_enabled"
+          label="上报开关"
+          tooltip="是否启用报警上报功能，需要先在上报配置页面配置上报方式"
         />
       </ModalForm>
 

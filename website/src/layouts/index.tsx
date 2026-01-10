@@ -1,4 +1,3 @@
-import "./index.scss";
 import type { ProSettings } from "@ant-design/pro-components";
 import { PageContainer, ProLayout } from "@ant-design/pro-components";
 import { useEffect, useRef, useState } from "react";
@@ -13,7 +12,7 @@ export interface OutletContextData {
 export default () => {
   const [settings] = useState<Partial<ProSettings> | undefined>({
     fixSiderbar: true,
-    layout: "mix",
+    layout: "side",
     splitMenus: false,
   });
 
@@ -23,10 +22,23 @@ export default () => {
 
   const mainContentRef = useRef<HTMLDivElement>(null);
   useEffect(() => {
+    const updateHeight = () => {
+      if (mainContentRef.current) {
+        setContentHeight(mainContentRef.current.offsetHeight);
+      }
+    };
+
+    updateHeight();
+
+    const resizeObserver = new ResizeObserver(updateHeight);
     if (mainContentRef.current) {
-      setContentHeight(mainContentRef.current.offsetHeight);
+      resizeObserver.observe(mainContentRef.current);
     }
-  }, [mainContentRef.current]);
+
+    return () => {
+      resizeObserver.disconnect();
+    };
+  }, []);
 
   if (typeof document === "undefined") {
     return <div />;
@@ -36,18 +48,15 @@ export default () => {
     <div
       id="test-pro-layout"
       style={{
-        width: "100vw",
         height: "100vh",
         overflow: "auto",
         position: "relative",
       }}
     >
       <ProLayout
-        style={{ height: "100%" }}
         contentWidth="Fluid"
         title={""}
         logo="/logo.jpg"
-        layout="mix"
         breadcrumbRender={false}
         route={{ path: "/", routes: rootRouter }}
         location={{
@@ -114,12 +123,8 @@ export default () => {
             <div
               ref={mainContentRef}
               style={{
-                minHeight: "calc(100vh - 200px)",
-                backgroundColor: "#ffffff",
-                padding: "20px",
-                paddingBottom: "70px", // 为固定footer留出空间
-                overflowY: "auto",
-                boxSizing: "border-box",
+                height: "100%",
+                overflow: "auto",
               }}
             >
               <Outlet

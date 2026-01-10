@@ -17,7 +17,12 @@ export default [
       {
         index: true,
         name: "推流配置",
-        element: lazyLoad(lazy(() => import("@/pages/StreamConfig"))),
+        element: lazyLoad(lazy(() => import("@/pages/PushStreamConfig"))),
+      },
+      {
+        path: "report",
+        name: "上报配置",
+        element: lazyLoad(lazy(() => import("@/pages/ReportConfig"))),
       },
     ],
   },

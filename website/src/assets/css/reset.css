@@ -92,9 +92,9 @@
    clear: both;
    visibility: hidden;
  }
- .clearfix{
-   *zoom: 1;
- }
+.clearfix{
+  /* *zoom: 1; - 已移除，现代浏览器不需要此 IE hack */
+}
   
  /*隐藏*/
  .dn{

@@ -32,6 +32,10 @@ request.interceptors.request.use(
         return qs.stringify(params, { arrayFormat: "repeat" });
       };
     }
+    // 如果使用 FormData，删除默认的 Content-Type，让 axios 自动设置正确的 boundary
+    if (config.data instanceof FormData) {
+      delete config.headers?.["Content-Type"];
+    }
     // 使用session管理，不需要手动添加token
     // session cookie会自动由浏览器发送
     return config;

@@ -9,6 +9,7 @@ export interface Channel {
   status: ChannelStatus;
   enabled: boolean;
   push_enabled: boolean;
+  report_enabled: boolean;
   width: number;
   height: number;
   fps: number;
@@ -22,6 +23,7 @@ export interface CreateChannelParams {
   source_url: string;
   enabled?: boolean;
   push_enabled?: boolean;
+  report_enabled?: boolean;
 }
 
 export interface UpdateChannelParams {
@@ -30,6 +32,7 @@ export interface UpdateChannelParams {
   source_url?: string;
   enabled?: boolean;
   push_enabled?: boolean;
+  report_enabled?: boolean;
 }
 
 export interface ApiResponse<T = any> {

@@ -19,6 +19,14 @@ export default [
         name: "通道列表",
         element: lazyLoad(lazy(() => import("@/pages/Channel/List"))),
       },
+      {
+        path: "algorithm/:channelId",
+        name: "算法配置",
+        element: lazyLoad(lazy(() => import("@/pages/AlgorithmConfig"))),
+        meta: {
+          hideInMenu: true,
+        },
+      },
     ],
   },
 ] as RouteObject;
