@@ -26,6 +26,7 @@ import {
 import {
   FaUndo,
   FaArrowLeft,
+  FaDrawPolygon,
 } from "react-icons/fa";
 import {
   getAlgorithmConfig,
@@ -38,6 +39,7 @@ import {
 } from "@/api/algorithm";
 import { getChannel } from "@/api/channel";
 import { getModelList, getClassList, type Model, type ClassInfo } from "@/api/model";
+import ROIDrawer from "@/components/ROIDrawer";
 
 function AlgorithmConfigPage() {
   const { channelId } = useParams<{ channelId: string }>();
@@ -53,6 +55,8 @@ function AlgorithmConfigPage() {
   const [classes, setClasses] = useState<ClassInfo[]>([]);
   const [rois, setRois] = useState<ROI[]>([]);
   const [alertRules, setAlertRules] = useState<AlertRule[]>([]);
+  const [drawerVisible, setDrawerVisible] = useState(false);
+  const [editingRoiIndex, setEditingRoiIndex] = useState<number | null>(null);
 
   // 加载配置
   function loadConfig() {
@@ -436,22 +440,14 @@ function AlgorithmConfigPage() {
               <div style={{ marginBottom: 16 }}>
                 <Button
                   type="dashed"
+                  icon={<FaDrawPolygon />}
                   onClick={() => {
-                    const newRoi: ROI = {
-                      id: Date.now(),
-                      type: "RECTANGLE",
-                      name: `区域${rois.length + 1}`,
-                      enabled: true,
-                      points: [
-                        { x: 0, y: 0 },
-                        { x: 100, y: 100 },
-                      ],
-                    };
-                    setRois([...rois, newRoi]);
+                    setEditingRoiIndex(null);
+                    setDrawerVisible(true);
                   }}
                   style={{ width: "100%" }}
                 >
-                  添加矩形区域
+                  绘制新区域
                 </Button>
               </div>
               {rois.map((roi, index) => (
@@ -480,6 +476,17 @@ function AlgorithmConfigPage() {
                       />
                       <Button
                         type="link"
+                        size="small"
+                        icon={<FaDrawPolygon />}
+                        onClick={() => {
+                          setEditingRoiIndex(index);
+                          setDrawerVisible(true);
+                        }}
+                      >
+                        重新绘制
+                      </Button>
+                      <Button
+                        type="link"
                         danger
                         size="small"
                         onClick={() => {
@@ -501,7 +508,7 @@ function AlgorithmConfigPage() {
                           </Tag>
                         </div>
                         <div style={{ fontSize: 12, color: "#666" }}>
-                          提示: ROI区域的具体坐标需要在视频流播放界面中绘制。当前配置仅用于告警规则关联。
+                          提示: 点击"重新绘制"按钮可以在画布上绘制区域。
                         </div>
                         {roi.points && roi.points.length > 0 && (
                           <div style={{ fontSize: 12, color: "#999" }}>
@@ -784,6 +791,41 @@ function AlgorithmConfigPage() {
           </ProForm>
         </Spin>
       </Card>
+
+      <ROIDrawer
+        visible={drawerVisible}
+        onClose={() => {
+          setDrawerVisible(false);
+          setEditingRoiIndex(null);
+        }}
+        onConfirm={(roi) => {
+          if (editingRoiIndex !== null && editingRoiIndex >= 0 && editingRoiIndex < rois.length) {
+            // 编辑现有ROI
+            const newRois = [...rois];
+            newRois[editingRoiIndex] = {
+              ...newRois[editingRoiIndex],
+              type: roi.type,
+              points: roi.points,
+            };
+            setRois(newRois);
+            message.success("区域已更新");
+          } else {
+            // 添加新ROI
+            setRois([...rois, roi]);
+            message.success("区域已添加");
+          }
+          setEditingRoiIndex(null);
+        }}
+        width={form.getFieldValue("input_width") || channelWidth}
+        height={form.getFieldValue("input_height") || channelHeight}
+        existingRois={rois}
+        editingRoi={
+          editingRoiIndex !== null && editingRoiIndex >= 0 && editingRoiIndex < rois.length
+            ? rois[editingRoiIndex]
+            : null
+        }
+        channelId={channelId ? parseInt(channelId, 10) : null}
+      />
     </div>
   );
 }
