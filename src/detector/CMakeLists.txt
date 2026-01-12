@@ -13,6 +13,7 @@ target_link_libraries(detector PUBLIC
     ${OpenCV_LIBS}
     onnxruntime::onnxruntime
     utils
+    models
 )
 
 target_compile_options(detector PRIVATE

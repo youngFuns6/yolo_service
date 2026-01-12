@@ -6,6 +6,7 @@
 #include <string>
 #include <memory>
 #include "image_utils.h"
+#include "algorithm_config.h"
 
 namespace detector_service {
 
@@ -22,6 +23,23 @@ public:
     bool initialize();
     std::vector<Detection> detect(const cv::Mat& image);
     cv::Mat processFrame(const cv::Mat& frame);
+    
+    // 动态配置更新
+    void updateConfThreshold(float threshold) { conf_threshold_ = threshold; }
+    void updateNmsThreshold(float threshold) { nms_threshold_ = threshold; }
+    float getConfThreshold() const { return conf_threshold_; }
+    float getNmsThreshold() const { return nms_threshold_; }
+    
+    // 应用过滤（类别、ROI等）
+    // frame_width和frame_height用于将归一化的ROI坐标转换为像素坐标
+    std::vector<Detection> applyFilters(const std::vector<Detection>& detections,
+                                       const std::vector<int>& enabled_classes = {},
+                                       const std::vector<ROI>& rois = {},
+                                       int frame_width = 0,
+                                       int frame_height = 0);
+    
+    // 获取类别名称列表
+    const std::vector<std::string>& getClassNames() const { return class_names_; }
 
 private:
     std::string model_path_;

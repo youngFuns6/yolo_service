@@ -4,7 +4,7 @@
 
 namespace detector_service {
 
-void setupStreamConfigRoutes(crow::SimpleApp& app);
+void setupModelRoutes(crow::SimpleApp& app);
 
 } // namespace detector_service
 

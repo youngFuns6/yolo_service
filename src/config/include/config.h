@@ -14,7 +14,7 @@ struct DetectorConfig {
 };
 
 struct DatabaseConfig {
-    std::string db_path = "alerts.db";
+    std::string db_path = "detector.db";
     int max_storage_days = 30;
 };
 

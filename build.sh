@@ -150,6 +150,21 @@ determine_triplet() {
     esac
 }
 
+# 检查 CMake
+check_cmake() {
+    if ! command -v cmake >/dev/null 2>&1; then
+        echo -e "${RED}错误: 未找到 CMake${NC}"
+        echo -e "${YELLOW}请安装 CMake:${NC}"
+        echo -e "${BLUE}  macOS:   brew install cmake${NC}"
+        echo -e "${BLUE}  Linux:   sudo apt-get install cmake${NC}"
+        echo -e "${BLUE}  Windows: 从 https://cmake.org/download/ 下载安装${NC}"
+        exit 1
+    fi
+    
+    CMAKE_VERSION=$(cmake --version | head -n1 | cut -d' ' -f3)
+    echo -e "${GREEN}找到 CMake: $CMAKE_VERSION${NC}"
+}
+
 # 检查 vcpkg
 check_vcpkg() {
     if [ -z "$VCPKG_ROOT" ]; then
@@ -195,6 +210,25 @@ create_build_dir() {
     echo -e "${GREEN}构建目录: $BUILD_DIR${NC}"
 }
 
+# 检测并设置 CMake 生成器
+detect_cmake_generator() {
+    # 优先使用 Ninja（更快）
+    if command -v ninja >/dev/null 2>&1; then
+        echo -e "${GREEN}使用 Ninja 生成器${NC}" >&2
+        echo "Ninja"
+    # 其次使用 Unix Makefiles
+    elif command -v make >/dev/null 2>&1; then
+        echo -e "${GREEN}使用 Unix Makefiles 生成器${NC}" >&2
+        echo "Unix Makefiles"
+    else
+        echo -e "${RED}错误: 未找到构建工具（ninja 或 make）${NC}" >&2
+        echo -e "${YELLOW}请安装其中一个:${NC}" >&2
+        echo -e "${BLUE}  macOS:   brew install ninja${NC}" >&2
+        echo -e "${BLUE}  Linux:   sudo apt-get install ninja-build${NC}" >&2
+        exit 1
+    fi
+}
+
 # 配置 CMake
 configure_cmake() {
     echo -e "${BLUE}配置 CMake...${NC}"
@@ -203,9 +237,13 @@ configure_cmake() {
     echo -e "${BLUE}构建类型: ${BUILD_TYPE}${NC}"
     echo -e "${BLUE}vcpkg triplet: ${VCPKG_TRIPLET}${NC}"
     
+    # 检测 CMake 生成器
+    CMAKE_GENERATOR=$(detect_cmake_generator)
+    
     cd "$BUILD_DIR"
     
     CMAKE_ARGS=(
+        -G "$CMAKE_GENERATOR"
         -DCMAKE_TOOLCHAIN_FILE="$VCPKG_ROOT/scripts/buildsystems/vcpkg.cmake"
         -DVCPKG_TARGET_TRIPLET="$VCPKG_TRIPLET"
         -DCMAKE_BUILD_TYPE="$BUILD_TYPE"
@@ -244,6 +282,19 @@ configure_cmake() {
                 echo -e "${BLUE}安装工具链文件: $TOOLCHAIN_NAME${NC}"
                 mkdir -p "$VCPKG_TOOLCHAINS_DIR"
                 cp "$TOOLCHAIN_FILE" "$VCPKG_TOOLCHAINS_DIR/$TOOLCHAIN_NAME"
+            fi
+        fi
+    fi
+    
+    # macOS 本地编译配置
+    if [ "$PLATFORM" = "macos" ] && [ "$(uname -s)" = "Darwin" ]; then
+        # 确保使用正确的编译器
+        if [ -z "$CC" ]; then
+            # 尝试使用 clang（macOS 默认）
+            if command -v clang >/dev/null 2>&1; then
+                export CC=clang
+                export CXX=clang++
+                echo -e "${GREEN}使用编译器: clang/clang++${NC}"
             fi
         fi
     fi
@@ -301,7 +352,22 @@ configure_cmake() {
             ;;
     esac
     
-    cmake ../.. "${CMAKE_ARGS[@]}"
+    # 运行 CMake 配置
+    echo -e "${BLUE}运行 CMake 配置命令...${NC}"
+    if ! cmake ../.. "${CMAKE_ARGS[@]}"; then
+        echo -e "${RED}错误: CMake 配置失败${NC}"
+        echo -e "${YELLOW}可能的原因:${NC}"
+        echo -e "${BLUE}  1. vcpkg 依赖包下载失败（网络问题）${NC}"
+        echo -e "${BLUE}  2. 编译器未正确设置${NC}"
+        echo -e "${BLUE}  3. 缺少必要的构建工具${NC}"
+        echo ""
+        echo -e "${YELLOW}建议:${NC}"
+        echo -e "${BLUE}  - 检查网络连接，重试构建${NC}"
+        echo -e "${BLUE}  - 如果使用代理，检查 HTTP_PROXY 和 HTTPS_PROXY 环境变量${NC}"
+        echo -e "${BLUE}  - 查看详细日志: ${BUILD_DIR}/vcpkg-manifest-install.log${NC}"
+        cd ../..
+        exit 1
+    fi
     cd ../..
 }
 
@@ -362,6 +428,7 @@ main() {
         exit 0
     fi
     
+    check_cmake
     check_vcpkg
     determine_triplet
     create_build_dir

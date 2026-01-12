@@ -54,6 +54,9 @@ void setupChannelRoutes(crow::SimpleApp& app,
             if (json_body.has("push_enabled")) {
                 channel.push_enabled = json_body["push_enabled"].b();
             }
+            if (json_body.has("report_enabled")) {
+                channel.report_enabled = json_body["report_enabled"].b();
+            }
             
             auto& channel_manager = ChannelManager::getInstance();
             int channel_id = channel_manager.createChannel(channel);
@@ -106,6 +109,7 @@ void setupChannelRoutes(crow::SimpleApp& app,
             ch["status"] = channelStatusToString(channel->status);
             ch["enabled"] = channel->enabled.load();
             ch["push_enabled"] = channel->push_enabled.load();
+            ch["report_enabled"] = channel->report_enabled.load();
             ch["width"] = channel->width;
             ch["height"] = channel->height;
             ch["fps"] = channel->fps;
@@ -138,6 +142,7 @@ void setupChannelRoutes(crow::SimpleApp& app,
             response["channel"]["status"] = channelStatusToString(channel->status);
             response["channel"]["enabled"] = channel->enabled.load();
             response["channel"]["push_enabled"] = channel->push_enabled.load();
+            response["channel"]["report_enabled"] = channel->report_enabled.load();
             response["channel"]["width"] = channel->width;
             response["channel"]["height"] = channel->height;
             response["channel"]["fps"] = channel->fps;
@@ -178,6 +183,9 @@ void setupChannelRoutes(crow::SimpleApp& app,
             }
             if (json_body.has("push_enabled")) {
                 channel.push_enabled = json_body["push_enabled"].b();
+            }
+            if (json_body.has("report_enabled")) {
+                channel.report_enabled = json_body["report_enabled"].b();
             }
             
             bool success = channel_manager.updateChannel(channel_id, channel);

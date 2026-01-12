@@ -198,6 +198,69 @@ vcpkg install crow sqlite3 onnxruntime opencv4[ffmpeg] nlohmann-json --triplet x
 - 减少并行任务数: `./build.sh -j 2`
 - 或使用单线程编译: `./build.sh -j 1`
 
+### 5. vcpkg 下载失败（网络超时）
+
+**问题**: `error: curl: (56) Recv failure: Operation timed out` 或 `Download failed, halting portfile`
+
+**解决**: 
+
+1. **检查网络连接**
+   ```bash
+   # 测试网络连接
+   curl -I https://github.com
+   ```
+
+2. **配置代理（如果使用代理）**
+   ```bash
+   # 如果使用 HTTP 代理（如 v2ray, shadowsocks）
+   export HTTP_PROXY=http://127.0.0.1:1087
+   export HTTPS_PROXY=http://127.0.0.1:1087
+   
+   # 注意：不要使用 https:// 前缀，除非你的代理确实是 HTTPS 代理
+   ```
+
+3. **重试构建**
+   ```bash
+   # 清理构建目录后重试
+   ./build.sh -c
+   ./build.sh -p macos -a arm64
+   ```
+
+4. **手动安装失败的包**
+   ```bash
+   # 查看失败的包名称（从日志中获取）
+   # 例如：utf8-range
+   cd $VCPKG_ROOT
+   ./vcpkg install utf8-range:arm64-osx
+   ```
+
+5. **使用镜像源（如果可用）**
+   - 某些地区可能需要使用镜像源
+   - 检查 vcpkg 文档了解如何配置镜像
+
+### 6. CMake 生成器错误
+
+**问题**: `CMake Error: CMake was unable to find a build program corresponding to "Unix Makefiles"`
+
+**解决**: 
+
+1. **安装构建工具**
+   ```bash
+   # macOS
+   brew install ninja
+   # 或
+   brew install make
+   
+   # Linux
+   sudo apt-get install ninja-build
+   # 或
+   sudo apt-get install build-essential
+   ```
+
+2. **脚本会自动检测并使用可用的生成器**
+   - 优先使用 Ninja（更快）
+   - 如果没有 Ninja，则使用 Unix Makefiles
+
 ## 高级用法
 
 ### 自定义构建目录
@@ -261,6 +324,8 @@ build:
 3. 查看 CMake 配置输出
 4. 检查编译器版本和兼容性
 5. 查看构建日志中的错误信息
+6. 检查网络连接和代理设置（如果 vcpkg 下载失败）
+7. 查看详细日志文件：`build/{platform}-{arch}-{type}/vcpkg-manifest-install.log`
 
 ## 相关文档
 

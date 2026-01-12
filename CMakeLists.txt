@@ -72,6 +72,8 @@ find_package(Threads REQUIRED)
 find_package(unofficial-sqlite3 REQUIRED)
 find_package(Crow CONFIG REQUIRED)
 find_package(onnxruntime CONFIG REQUIRED)
+find_package(CURL REQUIRED)
+find_package(unofficial-mosquitto CONFIG REQUIRED)
 
 # 包含基础目录
 include_directories(

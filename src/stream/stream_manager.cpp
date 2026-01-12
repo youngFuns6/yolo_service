@@ -2,7 +2,8 @@
 #include "config.h"
 #include "database.h"
 #include "channel.h"
-#include "stream_config.h"
+#include "push_stream_config.h"
+#include "algorithm_config.h"
 #include <iostream>
 #include <chrono>
 #include <thread>
@@ -83,6 +84,9 @@ bool StreamManager::startAnalysis(int channel_id, std::shared_ptr<Channel> chann
     
     auto context = std::make_unique<StreamContext>();
     context->running = true;
+    context->push_stream_enabled = false;  // 初始化为false，在streamWorker中根据通道状态设置
+    context->push_width = 0;
+    context->push_height = 0;
     
     // 解码URL中的HTML实体编码（如 &amp; -> &）
     std::string decoded_url = decodeUrlEntities(channel->source_url);
@@ -138,6 +142,12 @@ bool StreamManager::stopAnalysis(int channel_id) {
     
     context->cap.release();
     
+    // 释放推流资源
+    if (context->writer.isOpened()) {
+        context->writer.release();
+        std::cout << "通道 " << channel_id << " RTMP推流已停止" << std::endl;
+    }
+    
     streams_.erase(it);
     
     // 更新状态为stopped（如果enabled为false，则保持stopped；如果enabled为true，状态会在重新启动分析时更新）
@@ -159,6 +169,23 @@ bool StreamManager::isAnalyzing(int channel_id) {
     return it != streams_.end() && it->second->running.load();
 }
 
+bool StreamManager::updateAlgorithmConfig(int channel_id, const AlgorithmConfig& config) {
+    std::lock_guard<std::mutex> lock(streams_mutex_);
+    auto it = streams_.find(channel_id);
+    if (it == streams_.end()) {
+        return false;
+    }
+    
+    // 更新配置
+    {
+        std::lock_guard<std::mutex> config_lock(it->second->config_mutex);
+        it->second->algorithm_config = config;
+    }
+    
+    std::cout << "StreamManager: 通道 " << channel_id << " 的算法配置已更新" << std::endl;
+    return true;
+}
+
 void StreamManager::streamWorker(int channel_id, std::shared_ptr<Channel> channel,
                                  std::shared_ptr<YOLOv11Detector> detector) {
     std::cout << "StreamManager: 启动工作线程，通道ID=" << channel_id 
@@ -174,6 +201,64 @@ void StreamManager::streamWorker(int channel_id, std::shared_ptr<Channel> channe
     auto& context = it->second;
     lock.unlock();  // 获取引用后释放锁，后续访问 context 的成员不需要锁（因为不会删除）
     
+    // 加载通道的算法配置
+    {
+        std::lock_guard<std::mutex> config_lock(context->config_mutex);
+        auto& config_manager = AlgorithmConfigManager::getInstance();
+        if (!config_manager.getAlgorithmConfig(channel_id, context->algorithm_config)) {
+            std::cerr << "StreamManager: 无法加载通道 " << channel_id << " 的算法配置，使用默认配置" << std::endl;
+            context->algorithm_config = config_manager.getDefaultConfig(channel_id);
+        }
+        
+        // 根据配置更新检测器参数
+        if (detector) {
+            detector->updateConfThreshold(context->algorithm_config.conf_threshold);
+            detector->updateNmsThreshold(context->algorithm_config.nms_threshold);
+        }
+    }
+    
+    // 初始化推流（如果通道推流状态开启）
+    context->push_stream_enabled = channel->push_enabled.load();
+    context->push_width = 0;
+    context->push_height = 0;
+    if (context->push_stream_enabled) {
+        auto& push_stream_config_mgr = PushStreamConfigManager::getInstance();
+        PushStreamConfig push_config = push_stream_config_mgr.getPushStreamConfig();
+        
+        if (!push_config.rtmp_url.empty()) {
+            // 确定推流的尺寸和帧率
+            context->push_width = push_config.width.value_or(channel->width);
+            context->push_height = push_config.height.value_or(channel->height);
+            int push_fps = push_config.fps.value_or(channel->fps);
+            
+            // 使用FFmpeg后端打开RTMP推流
+            std::string output_url = push_config.rtmp_url;
+            // 如果URL不包含通道标识，可以添加通道ID作为流名称的一部分
+            // 这里假设RTMP URL已经包含了完整的推流路径
+            
+            // 使用H.264编码进行RTMP推流
+            int fourcc = cv::VideoWriter::fourcc('H', '2', '6', '4');
+            
+            // 尝试打开VideoWriter
+            // 注意：OpenCV的VideoWriter对RTMP支持有限，可能需要使用FFmpeg命令行或GStreamer
+            // 这里使用标准的VideoWriter API
+            context->writer.open(output_url, cv::CAP_FFMPEG, fourcc, push_fps, 
+                                cv::Size(context->push_width, context->push_height), true);
+            
+            if (context->writer.isOpened()) {
+                std::cout << "通道 " << channel_id << " RTMP推流已启动: " << output_url 
+                          << " (尺寸: " << context->push_width << "x" << context->push_height 
+                          << ", 帧率: " << push_fps << ")" << std::endl;
+            } else {
+                std::cerr << "通道 " << channel_id << " RTMP推流启动失败: " << output_url << std::endl;
+                context->push_stream_enabled = false;
+            }
+        } else {
+            std::cerr << "通道 " << channel_id << " 推流已启用，但未配置RTMP地址" << std::endl;
+            context->push_stream_enabled = false;
+        }
+    }
+    
     cv::Mat frame, processed_frame;
     
     // 计算帧间隔
@@ -181,8 +266,12 @@ void StreamManager::streamWorker(int channel_id, std::shared_ptr<Channel> channe
     auto last_time = std::chrono::steady_clock::now();
     
     // 帧跳过机制：不是每一帧都进行检测，降低处理负担
-    // 检测频率：每 N 帧检测一次（例如每3帧检测1次）
-    const int DETECTION_INTERVAL = 3;  // 每3帧检测一次
+    // 检测频率：从算法配置中读取
+    int detection_interval = 3;  // 默认值
+    {
+        std::lock_guard<std::mutex> config_lock(context->config_mutex);
+        detection_interval = context->algorithm_config.detection_interval;
+    }
     int frame_counter = 0;  // 帧计数器
     
     // 重连相关变量
@@ -251,7 +340,7 @@ void StreamManager::streamWorker(int channel_id, std::shared_ptr<Channel> channe
         }
         
         // 检查是否需要检测（降低检测频率）
-        bool need_detection = (frame_counter % DETECTION_INTERVAL == 0);
+        bool need_detection = (frame_counter % detection_interval == 0);
         
         // retrieve 最新帧
         bool read_success = context->cap.retrieve(frame);
@@ -286,11 +375,50 @@ void StreamManager::streamWorker(int channel_id, std::shared_ptr<Channel> channe
         if (detector && need_detection) {
             // 只在指定间隔时进行检测
             detections = detector->detect(frame);
+            
+            // 应用算法配置的过滤（类别、ROI等）
+            {
+                std::lock_guard<std::mutex> config_lock(context->config_mutex);
+                detections = detector->applyFilters(
+                    detections,
+                    context->algorithm_config.enabled_classes,
+                    context->algorithm_config.rois,
+                    frame.cols,
+                    frame.rows
+                );
+            }
+            
             processed_frame = ImageUtils::drawDetections(frame, detections);
         } else {
             // 如果不需要检测或没有检测器，使用原始帧
             // 但如果有之前的检测结果，可以复用（这里简化处理，直接使用原始帧）
             processed_frame = frame.clone();
+        }
+        
+        // 推流处理：如果通道推流状态开启，则进行推流
+        if (context->push_stream_enabled && context->writer.isOpened()) {
+            // 根据检测状态决定推流内容
+            cv::Mat frame_to_push;
+            // 如果通道启用了检测功能（enabled=true），推送分析后的视频数据
+            // 如果检测器存在且进行了检测，processed_frame 包含检测框；否则是原始帧的克隆
+            // 如果通道未启用检测，推送原始通道视频数据
+            if (channel->enabled.load() && detector) {
+                // 检测开启，推送分析后的视频数据（带检测框的帧或原始帧）
+                frame_to_push = processed_frame;
+            } else {
+                // 检测未开启，推送原始通道视频数据
+                frame_to_push = frame;
+            }
+            
+            // 如果推流尺寸与帧尺寸不一致，需要调整大小
+            if (context->push_width > 0 && context->push_height > 0 && 
+                (frame_to_push.cols != context->push_width || frame_to_push.rows != context->push_height)) {
+                cv::Mat resized_frame;
+                cv::resize(frame_to_push, resized_frame, cv::Size(context->push_width, context->push_height));
+                context->writer.write(resized_frame);
+            } else {
+                context->writer.write(frame_to_push);
+            }
         }
         
         // 调用回调函数 - 无论是否有检测结果，都要发送帧数据

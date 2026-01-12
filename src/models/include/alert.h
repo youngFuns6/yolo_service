@@ -3,6 +3,9 @@
 #include <string>
 #include <vector>
 #include <memory>
+#include <map>
+#include <chrono>
+#include <mutex>
 
 namespace detector_service {
 
@@ -11,6 +14,8 @@ struct AlertRecord {
     int channel_id;
     std::string channel_name;
     std::string alert_type;
+    int alert_rule_id;           // 触发的告警规则ID
+    std::string alert_rule_name;  // 触发的告警规则名称
     std::string image_path;
     std::string image_data;  // base64 encoded
     float confidence;
@@ -20,6 +25,9 @@ struct AlertRecord {
     double bbox_y;
     double bbox_w;
     double bbox_h;
+    
+    AlertRecord() : id(0), channel_id(0), alert_rule_id(0), confidence(0.0f),
+                    bbox_x(0), bbox_y(0), bbox_w(0), bbox_h(0) {}
 };
 
 class AlertManager {
@@ -41,12 +49,22 @@ public:
 
     // 清理旧数据
     bool cleanupOldAlerts(int days);
+    
+    // 检查告警规则是否在抑制窗口内（防止重复告警）
+    bool isAlertSuppressed(int channel_id, int rule_id, int suppression_window_seconds);
+    
+    // 记录告警触发时间（用于抑制机制）
+    void recordAlertTrigger(int channel_id, int rule_id);
 
 private:
     AlertManager() = default;
     ~AlertManager() = default;
     AlertManager(const AlertManager&) = delete;
     AlertManager& operator=(const AlertManager&) = delete;
+    
+    // 告警抑制记录：key = "channel_id:rule_id", value = 最后触发时间戳
+    std::map<std::string, std::chrono::system_clock::time_point> alert_suppression_map_;
+    std::mutex suppression_mutex_;
 };
 
 } // namespace detector_service

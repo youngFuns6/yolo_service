@@ -4,7 +4,11 @@
 #include "frame_callback.h"
 #include "channel_api.h"
 #include "alert_api.h"
+#include "algorithm_config_api.h"
+#include "push_stream_config_api.h"
+#include "model_api.h"
 #include "ws_api.h"
+#include "report_config_api.h"
 #include <iostream>
 #include <fstream>
 #include <sstream>
@@ -152,6 +156,10 @@ void setupAllRoutes(crow::SimpleApp& app, const AppContext& context) {
     // 先设置 API 路由和 WebSocket 路由（优先级更高）
     setupChannelRoutes(app, context.detector, context.stream_manager);
     setupAlertRoutes(app);
+    setupReportConfigRoutes(app);
+    setupAlgorithmConfigRoutes(app);
+    setupPushStreamRoutes(app);
+    setupModelRoutes(app);
     setupWebSocketRoutes(app);
     
     // 设置根路由 - 返回 website/index.html 或 API 信息
@@ -177,7 +185,6 @@ void setupAllRoutes(crow::SimpleApp& app, const AppContext& context) {
 void startServer(crow::SimpleApp& app, const Config& config) {
     int port = config.getServerConfig().http_port;
     std::cout << "服务器启动在端口: " << port << std::endl;
-    std::cout << "WebSocket 地址: ws://localhost:" << port << "/ws" << std::endl;
     
     app.port(port).multithreaded().run();
 }
@@ -195,22 +202,34 @@ void startEnabledChannels(StreamManager* stream_manager,
     std::cout << "正在检查并启动已启用的通道，共 " << channels.size() << " 个通道" << std::endl;
     
     int started_count = 0;
+    int push_enabled_count = 0;
     for (const auto& channel : channels) {
         if (channel && channel->enabled.load()) {
+            bool push_enabled = channel->push_enabled.load();
             std::cout << "发现已启用的通道: ID=" << channel->id 
                       << ", 名称=" << channel->name 
-                      << ", URL=" << channel->source_url << std::endl;
+                      << ", URL=" << channel->source_url
+                      << ", 推流状态=" << (push_enabled ? "开启" : "关闭") << std::endl;
             
             if (stream_manager->startAnalysis(channel->id, channel, detector)) {
                 started_count++;
-                std::cout << "通道 " << channel->id << " 启动成功" << std::endl;
+                if (push_enabled) {
+                    push_enabled_count++;
+                    std::cout << "通道 " << channel->id << " 启动成功，推流已启用" << std::endl;
+                } else {
+                    std::cout << "通道 " << channel->id << " 启动成功" << std::endl;
+                }
             } else {
                 std::cerr << "通道 " << channel->id << " 启动失败" << std::endl;
             }
         }
     }
     
-    std::cout << "已启动 " << started_count << " 个已启用的通道" << std::endl;
+    std::cout << "已启动 " << started_count << " 个已启用的通道";
+    if (push_enabled_count > 0) {
+        std::cout << "，其中 " << push_enabled_count << " 个通道已开启推流";
+    }
+    std::cout << std::endl;
 }
 
 int startService() {

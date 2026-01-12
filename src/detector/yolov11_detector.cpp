@@ -433,6 +433,51 @@ std::vector<Detection> YOLOv11Detector::applyNMS(const std::vector<Detection>& d
     return result;
 }
 
+std::vector<Detection> YOLOv11Detector::applyFilters(const std::vector<Detection>& detections,
+                                                     const std::vector<int>& enabled_classes,
+                                                     const std::vector<ROI>& rois,
+                                                     int frame_width,
+                                                     int frame_height) {
+    std::vector<Detection> filtered;
+    
+    // 如果frame_width或frame_height为0，说明没有提供帧尺寸，跳过ROI过滤
+    bool can_use_roi = (frame_width > 0 && frame_height > 0);
+    
+    for (const auto& detection : detections) {
+        // 类别过滤
+        if (!enabled_classes.empty()) {
+            bool class_enabled = false;
+            for (int class_id : enabled_classes) {
+                if (detection.class_id == class_id) {
+                    class_enabled = true;
+                    break;
+                }
+            }
+            if (!class_enabled) {
+                continue;
+            }
+        }
+        
+        // ROI过滤
+        if (!rois.empty() && can_use_roi) {
+            bool in_roi = false;
+            for (const auto& roi : rois) {
+                if (roi.enabled && AlgorithmConfigManager::isDetectionInROI(detection.bbox, roi, frame_width, frame_height)) {
+                    in_roi = true;
+                    break;
+                }
+            }
+            if (!in_roi) {
+                continue;
+            }
+        }
+        
+        filtered.push_back(detection);
+    }
+    
+    return filtered;
+}
+
 cv::Mat YOLOv11Detector::processFrame(const cv::Mat& frame) {
     auto detections = detect(frame);
     return ImageUtils::drawDetections(frame, detections);

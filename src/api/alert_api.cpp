@@ -28,6 +28,8 @@ void setupAlertRoutes(crow::SimpleApp& app) {
             a["channel_id"] = alert.channel_id;
             a["channel_name"] = alert.channel_name;
             a["alert_type"] = alert.alert_type;
+            a["alert_rule_id"] = alert.alert_rule_id;
+            a["alert_rule_name"] = alert.alert_rule_name;
             a["image_path"] = alert.image_path;
             a["image_data"] = alert.image_data;
             a["confidence"] = alert.confidence;
@@ -99,6 +101,8 @@ void setupAlertRoutes(crow::SimpleApp& app) {
             a["channel_id"] = alert.channel_id;
             a["channel_name"] = alert.channel_name;
             a["alert_type"] = alert.alert_type;
+            a["alert_rule_id"] = alert.alert_rule_id;
+            a["alert_rule_name"] = alert.alert_rule_name;
             a["image_path"] = alert.image_path;
             a["image_data"] = alert.image_data;
             a["confidence"] = alert.confidence;

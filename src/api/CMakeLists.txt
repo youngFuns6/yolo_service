@@ -2,9 +2,12 @@
 add_library(api STATIC
     channel_api.cpp
     alert_api.cpp
-    stream_config_api.cpp
+    push_stream_config_api.cpp
+    algorithm_config_api.cpp
+    model_api.cpp
     ws_api.cpp
     ws_handler.cpp
+    report_config_api.cpp
 )
 
 target_include_directories(api PUBLIC
