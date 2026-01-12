@@ -7,6 +7,7 @@
 #include <iostream>
 #include <chrono>
 #include <thread>
+#include <vector>
 #include <opencv2/imgproc.hpp>
 #include <opencv2/imgcodecs.hpp>
 #include "image_utils.h"
@@ -435,9 +436,57 @@ StreamManager::StreamManager() {
 
 StreamManager::~StreamManager() {
     // 停止所有流
-    std::lock_guard<std::mutex> lock(streams_mutex_);
+    std::unique_lock<std::mutex> lock(streams_mutex_);
+    
+    // 收集所有需要join的线程
+    std::vector<std::thread> threads_to_join;
+    std::vector<std::unique_ptr<StreamContext>> contexts_to_cleanup;
+    
     for (auto& pair : streams_) {
-        stopAnalysis(pair.first);
+        auto& context = pair.second;
+        if (context) {
+            // 停止运行标志
+            context->running = false;
+            
+            // 保存线程以便后续join
+            if (context->thread.joinable()) {
+                threads_to_join.push_back(std::move(context->thread));
+            }
+            
+            // 保存context以便后续清理
+            contexts_to_cleanup.push_back(std::move(context));
+        }
+    }
+    
+    // 清空streams_，释放锁
+    streams_.clear();
+    lock.unlock();
+    
+    // 在锁外join所有线程
+    for (auto& thread : threads_to_join) {
+        try {
+            if (thread.joinable()) {
+                thread.join();
+            }
+        } catch (const std::system_error& e) {
+            std::cerr << "等待线程结束时出错: " << e.what() << std::endl;
+        }
+    }
+    
+    // 在锁外清理资源
+    for (auto& context : contexts_to_cleanup) {
+        if (context) {
+            context->cap.release();
+            
+            // 停止重连尝试
+            context->push_reconnect_needed = false;
+            context->push_reconnect_attempts = 0;
+            
+            // 释放推流资源
+            if (context->push_stream_enabled && context->fmt_ctx) {
+                cleanupFFmpegPushStream(context.get());
+            }
+        }
     }
 }
 
@@ -503,7 +552,7 @@ bool StreamManager::startAnalysis(int channel_id, std::shared_ptr<Channel> chann
 }
 
 bool StreamManager::stopAnalysis(int channel_id) {
-    std::lock_guard<std::mutex> lock(streams_mutex_);
+    std::unique_lock<std::mutex> lock(streams_mutex_);
     
     auto it = streams_.find(channel_id);
     if (it == streams_.end()) {
@@ -513,19 +562,40 @@ bool StreamManager::stopAnalysis(int channel_id) {
     auto& context = it->second;
     context->running = false;
     
-    if (context->thread.joinable()) {
-        context->thread.join();
+    // 保存线程引用，以便在释放锁后join
+    std::thread thread_to_join = std::move(context->thread);
+    
+    // 释放锁后再join线程，避免死锁
+    // 同时避免线程在持有锁时等待自己结束
+    lock.unlock();
+    
+    if (thread_to_join.joinable()) {
+        try {
+            thread_to_join.join();
+        } catch (const std::system_error& e) {
+            std::cerr << "通道 " << channel_id << " 等待线程结束时出错: " << e.what() << std::endl;
+        }
     }
     
-    context->cap.release();
+    // 重新获取锁以继续清理
+    lock.lock();
+    
+    // 重新查找（因为可能已经被其他操作修改）
+    it = streams_.find(channel_id);
+    if (it == streams_.end()) {
+        return true;  // 已经被删除，说明清理完成
+    }
+    
+    auto& context_ref = it->second;
+    context_ref->cap.release();
     
     // 停止重连尝试
-    context->push_reconnect_needed = false;
-    context->push_reconnect_attempts = 0;
+    context_ref->push_reconnect_needed = false;
+    context_ref->push_reconnect_attempts = 0;
     
     // 释放推流资源
-    if (context->push_stream_enabled && context->fmt_ctx) {
-        cleanupFFmpegPushStream(context.get());
+    if (context_ref->push_stream_enabled && context_ref->fmt_ctx) {
+        cleanupFFmpegPushStream(context_ref.get());
         std::cout << "通道 " << channel_id << " RTMP推流已停止" << std::endl;
     }
     
