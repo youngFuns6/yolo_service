@@ -240,6 +240,16 @@ configure_cmake() {
     # 检测 CMake 生成器
     CMAKE_GENERATOR=$(detect_cmake_generator)
     
+    # 检查构建目录中是否已有 CMakeCache.txt，如果生成器不匹配则清理
+    if [ -f "$BUILD_DIR/CMakeCache.txt" ]; then
+        CACHED_GENERATOR=$(grep "^CMAKE_GENERATOR:INTERNAL=" "$BUILD_DIR/CMakeCache.txt" 2>/dev/null | cut -d'=' -f2)
+        if [ -n "$CACHED_GENERATOR" ] && [ "$CACHED_GENERATOR" != "$CMAKE_GENERATOR" ]; then
+            echo -e "${YELLOW}警告: 检测到生成器不匹配（缓存: $CACHED_GENERATOR，当前: $CMAKE_GENERATOR）${NC}"
+            echo -e "${BLUE}清理 CMake 缓存...${NC}"
+            rm -rf "$BUILD_DIR/CMakeCache.txt" "$BUILD_DIR/CMakeFiles"
+        fi
+    fi
+    
     cd "$BUILD_DIR"
     
     CMAKE_ARGS=(

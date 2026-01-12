@@ -45,6 +45,11 @@ int AlertManager::getAlertCountByChannel(int channel_id) {
     return db.getAlertCountByChannel(channel_id);
 }
 
+bool AlertManager::updateAlertReportStatus(int alert_id, const std::string& report_status, const std::string& report_url) {
+    auto& db = Database::getInstance();
+    return db.updateAlertReportStatus(alert_id, report_status, report_url);
+}
+
 bool AlertManager::cleanupOldAlerts(int days) {
     auto& db = Database::getInstance();
     return db.cleanupOldAlerts(days);

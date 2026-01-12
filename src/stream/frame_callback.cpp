@@ -146,6 +146,8 @@ void processFrameCallback(int channel_id, const cv::Mat& frame,
             alert.bbox_y = highest_conf_det->bbox.y;
             alert.bbox_w = highest_conf_det->bbox.width;
             alert.bbox_h = highest_conf_det->bbox.height;
+            alert.report_status = "pending";
+            alert.report_url = "";
             
             int alert_id = alert_manager.createAlert(alert);
             alert.id = alert_id;
@@ -160,6 +162,16 @@ void processFrameCallback(int channel_id, const cv::Mat& frame,
                 
                 if (report_config.enabled.load()) {
                     auto& report_service = ReportService::getInstance();
+                    // 设置上报地址
+                    std::string report_url;
+                    if (report_config.type == ReportType::HTTP) {
+                        report_url = report_config.http_url;
+                    } else if (report_config.type == ReportType::MQTT) {
+                        report_url = report_config.mqtt_broker + ":" + std::to_string(report_config.mqtt_port) + "/" + report_config.mqtt_topic;
+                    }
+                    
+                    // 执行上报（异步非阻塞，立即返回）
+                    // 实际上报结果由后台线程处理并更新数据库状态
                     report_service.reportAlert(alert, report_config);
                 }
             }
@@ -258,6 +270,8 @@ void processFrameCallback(int channel_id, const cv::Mat& frame,
             alert.channel_id = channel_id;
             alert.channel_name = channel->name;
             alert.alert_type = alert_type;  // 使用模型输出的分类作为报警类型
+            alert.alert_rule_id = 0;
+            alert.alert_rule_name = "";
             alert.image_path = image_path;
             alert.image_data = image_base64;
             alert.confidence = highest_conf_det->confidence;  // 使用最高置信度
@@ -266,6 +280,8 @@ void processFrameCallback(int channel_id, const cv::Mat& frame,
             alert.bbox_y = highest_conf_det->bbox.y;
             alert.bbox_w = highest_conf_det->bbox.width;
             alert.bbox_h = highest_conf_det->bbox.height;
+            alert.report_status = "pending";
+            alert.report_url = "";
             
             int alert_id = alert_manager.createAlert(alert);
             alert.id = alert_id;
@@ -277,7 +293,19 @@ void processFrameCallback(int channel_id, const cv::Mat& frame,
                 
                 if (report_config.enabled.load()) {
                     auto& report_service = ReportService::getInstance();
+                    // 设置上报地址
+                    std::string report_url;
+                    if (report_config.type == ReportType::HTTP) {
+                        report_url = report_config.http_url;
+                    } else if (report_config.type == ReportType::MQTT) {
+                        report_url = report_config.mqtt_broker + ":" + std::to_string(report_config.mqtt_port) + "/" + report_config.mqtt_topic;
+                    }
+                    
+                    // 执行上报（异步非阻塞，立即返回）
+                    // 实际上报结果由后台线程处理并更新数据库状态
                     report_service.reportAlert(alert, report_config);
+                    
+                    // 状态已在创建 alert 时设置为 "pending"，后台线程会更新为 "success" 或 "failed"
                 }
             }
             
@@ -383,6 +411,8 @@ void processFrameCallback(int channel_id, const cv::Mat& frame,
             alert.bbox_y = highest_conf_det->bbox.y;
             alert.bbox_w = highest_conf_det->bbox.width;
             alert.bbox_h = highest_conf_det->bbox.height;
+            alert.report_status = "pending";
+            alert.report_url = "";
             
             int alert_id = alert_manager.createAlert(alert);
             alert.id = alert_id;
@@ -394,7 +424,19 @@ void processFrameCallback(int channel_id, const cv::Mat& frame,
                 
                 if (report_config.enabled.load()) {
                     auto& report_service = ReportService::getInstance();
+                    // 设置上报地址
+                    std::string report_url;
+                    if (report_config.type == ReportType::HTTP) {
+                        report_url = report_config.http_url;
+                    } else if (report_config.type == ReportType::MQTT) {
+                        report_url = report_config.mqtt_broker + ":" + std::to_string(report_config.mqtt_port) + "/" + report_config.mqtt_topic;
+                    }
+                    
+                    // 执行上报（异步非阻塞，立即返回）
+                    // 实际上报结果由后台线程处理并更新数据库状态
                     report_service.reportAlert(alert, report_config);
+                    
+                    // 状态已在创建 alert 时设置为 "pending"，后台线程会更新为 "success" 或 "failed"
                 }
             }
             

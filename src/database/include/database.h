@@ -29,6 +29,7 @@ public:
     AlertRecord getAlert(int alert_id);
     int getAlertCount();
     int getAlertCountByChannel(int channel_id);
+    bool updateAlertReportStatus(int alert_id, const std::string& report_status, const std::string& report_url);
 
     // 清理旧数据
     bool cleanupOldAlerts(int days);

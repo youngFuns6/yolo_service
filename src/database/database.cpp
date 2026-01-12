@@ -45,13 +45,14 @@ bool Database::createTables() {
             alert_rule_id INTEGER NOT NULL DEFAULT 0,
             alert_rule_name TEXT NOT NULL DEFAULT '',
             image_path TEXT,
-            image_data TEXT,
             confidence REAL,
             detected_objects TEXT,
             bbox_x REAL,
             bbox_y REAL,
             bbox_w REAL,
             bbox_h REAL,
+            report_status TEXT NOT NULL DEFAULT 'pending',
+            report_url TEXT NOT NULL DEFAULT '',
             created_at TEXT NOT NULL
         );
 
@@ -151,6 +152,31 @@ bool Database::createTables() {
         sqlite3_free(err_msg);
     }
 
+    // 为现有数据库添加report_status字段（如果不存在）
+    // 注意：SQLite不支持直接删除列，所以如果image_data列存在，我们保留它但不使用
+    const char* alter_report_status_sql = "ALTER TABLE alerts ADD COLUMN report_status TEXT NOT NULL DEFAULT 'pending'";
+    err_msg = nullptr;
+    rc = sqlite3_exec(db_, alter_report_status_sql, nullptr, nullptr, &err_msg);
+    if (rc != SQLITE_OK && err_msg) {
+        std::string error_str = err_msg;
+        if (error_str.find("duplicate column name") == std::string::npos) {
+            std::cerr << "添加report_status字段失败: " << err_msg << std::endl;
+        }
+        sqlite3_free(err_msg);
+    }
+
+    // 为现有数据库添加report_url字段（如果不存在）
+    const char* alter_report_url_sql = "ALTER TABLE alerts ADD COLUMN report_url TEXT NOT NULL DEFAULT ''";
+    err_msg = nullptr;
+    rc = sqlite3_exec(db_, alter_report_url_sql, nullptr, nullptr, &err_msg);
+    if (rc != SQLITE_OK && err_msg) {
+        std::string error_str = err_msg;
+        if (error_str.find("duplicate column name") == std::string::npos) {
+            std::cerr << "添加report_url字段失败: " << err_msg << std::endl;
+        }
+        sqlite3_free(err_msg);
+    }
+
     return true;
 }
 
@@ -158,9 +184,9 @@ int Database::insertAlert(const AlertRecord& alert) {
     const char* sql = R"(
         INSERT INTO alerts (
             channel_id, channel_name, alert_type, alert_rule_id, alert_rule_name,
-            image_path, image_data, confidence, detected_objects, 
-            bbox_x, bbox_y, bbox_w, bbox_h, created_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            image_path, confidence, detected_objects, 
+            bbox_x, bbox_y, bbox_w, bbox_h, report_status, report_url, created_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     )";
 
     sqlite3_stmt* stmt;
@@ -176,16 +202,19 @@ int Database::insertAlert(const AlertRecord& alert) {
     sqlite3_bind_int(stmt, 4, alert.alert_rule_id);
     sqlite3_bind_text(stmt, 5, alert.alert_rule_name.c_str(), -1, SQLITE_STATIC);
     sqlite3_bind_text(stmt, 6, alert.image_path.c_str(), -1, SQLITE_STATIC);
-    sqlite3_bind_text(stmt, 7, alert.image_data.c_str(), -1, SQLITE_STATIC);
-    sqlite3_bind_double(stmt, 8, alert.confidence);
-    sqlite3_bind_text(stmt, 9, alert.detected_objects.c_str(), -1, SQLITE_STATIC);
-    sqlite3_bind_double(stmt, 10, alert.bbox_x);
-    sqlite3_bind_double(stmt, 11, alert.bbox_y);
-    sqlite3_bind_double(stmt, 12, alert.bbox_w);
-    sqlite3_bind_double(stmt, 13, alert.bbox_h);
+    sqlite3_bind_double(stmt, 7, alert.confidence);
+    sqlite3_bind_text(stmt, 8, alert.detected_objects.c_str(), -1, SQLITE_STATIC);
+    sqlite3_bind_double(stmt, 9, alert.bbox_x);
+    sqlite3_bind_double(stmt, 10, alert.bbox_y);
+    sqlite3_bind_double(stmt, 11, alert.bbox_w);
+    sqlite3_bind_double(stmt, 12, alert.bbox_h);
+    
+    std::string report_status = alert.report_status.empty() ? "pending" : alert.report_status;
+    sqlite3_bind_text(stmt, 13, report_status.c_str(), -1, SQLITE_STATIC);
+    sqlite3_bind_text(stmt, 14, alert.report_url.c_str(), -1, SQLITE_STATIC);
     
     std::string created_at = alert.created_at.empty() ? getCurrentTime() : alert.created_at;
-    sqlite3_bind_text(stmt, 14, created_at.c_str(), -1, SQLITE_STATIC);
+    sqlite3_bind_text(stmt, 15, created_at.c_str(), -1, SQLITE_STATIC);
 
     rc = sqlite3_step(stmt);
     int alert_id = -1;
@@ -262,14 +291,28 @@ std::vector<AlertRecord> Database::getAlerts(int limit, int offset) {
         }
         int offset = (col_count > 5) ? 6 : 4;
         alert.image_path = reinterpret_cast<const char*>(sqlite3_column_text(stmt, offset));
-        alert.image_data = reinterpret_cast<const char*>(sqlite3_column_text(stmt, offset + 1));
-        alert.confidence = sqlite3_column_double(stmt, offset + 2);
-        alert.detected_objects = reinterpret_cast<const char*>(sqlite3_column_text(stmt, offset + 3));
-        alert.bbox_x = sqlite3_column_double(stmt, offset + 4);
-        alert.bbox_y = sqlite3_column_double(stmt, offset + 5);
-        alert.bbox_w = sqlite3_column_double(stmt, offset + 6);
-        alert.bbox_h = sqlite3_column_double(stmt, offset + 7);
-        alert.created_at = reinterpret_cast<const char*>(sqlite3_column_text(stmt, offset + 8));
+        alert.confidence = sqlite3_column_double(stmt, offset + 1);
+        alert.detected_objects = reinterpret_cast<const char*>(sqlite3_column_text(stmt, offset + 2));
+        alert.bbox_x = sqlite3_column_double(stmt, offset + 3);
+        alert.bbox_y = sqlite3_column_double(stmt, offset + 4);
+        alert.bbox_w = sqlite3_column_double(stmt, offset + 5);
+        alert.bbox_h = sqlite3_column_double(stmt, offset + 6);
+        
+        // 兼容新旧数据库结构：检查是否有 report_status 和 report_url 字段
+        if (col_count > offset + 7) {
+            const char* report_status = reinterpret_cast<const char*>(sqlite3_column_text(stmt, offset + 7));
+            alert.report_status = report_status ? report_status : "pending";
+        } else {
+            alert.report_status = "pending";
+        }
+        if (col_count > offset + 8) {
+            const char* report_url = reinterpret_cast<const char*>(sqlite3_column_text(stmt, offset + 8));
+            alert.report_url = report_url ? report_url : "";
+        } else {
+            alert.report_url = "";
+        }
+        
+        alert.created_at = reinterpret_cast<const char*>(sqlite3_column_text(stmt, offset + (col_count > offset + 8 ? 9 : 8)));
         
         alerts.push_back(alert);
     }
@@ -309,14 +352,28 @@ std::vector<AlertRecord> Database::getAlertsByChannel(int channel_id, int limit,
         }
         int offset = (col_count > 5) ? 6 : 4;
         alert.image_path = reinterpret_cast<const char*>(sqlite3_column_text(stmt, offset));
-        alert.image_data = reinterpret_cast<const char*>(sqlite3_column_text(stmt, offset + 1));
-        alert.confidence = sqlite3_column_double(stmt, offset + 2);
-        alert.detected_objects = reinterpret_cast<const char*>(sqlite3_column_text(stmt, offset + 3));
-        alert.bbox_x = sqlite3_column_double(stmt, offset + 4);
-        alert.bbox_y = sqlite3_column_double(stmt, offset + 5);
-        alert.bbox_w = sqlite3_column_double(stmt, offset + 6);
-        alert.bbox_h = sqlite3_column_double(stmt, offset + 7);
-        alert.created_at = reinterpret_cast<const char*>(sqlite3_column_text(stmt, offset + 8));
+        alert.confidence = sqlite3_column_double(stmt, offset + 1);
+        alert.detected_objects = reinterpret_cast<const char*>(sqlite3_column_text(stmt, offset + 2));
+        alert.bbox_x = sqlite3_column_double(stmt, offset + 3);
+        alert.bbox_y = sqlite3_column_double(stmt, offset + 4);
+        alert.bbox_w = sqlite3_column_double(stmt, offset + 5);
+        alert.bbox_h = sqlite3_column_double(stmt, offset + 6);
+        
+        // 兼容新旧数据库结构：检查是否有 report_status 和 report_url 字段
+        if (col_count > offset + 7) {
+            const char* report_status = reinterpret_cast<const char*>(sqlite3_column_text(stmt, offset + 7));
+            alert.report_status = report_status ? report_status : "pending";
+        } else {
+            alert.report_status = "pending";
+        }
+        if (col_count > offset + 8) {
+            const char* report_url = reinterpret_cast<const char*>(sqlite3_column_text(stmt, offset + 8));
+            alert.report_url = report_url ? report_url : "";
+        } else {
+            alert.report_url = "";
+        }
+        
+        alert.created_at = reinterpret_cast<const char*>(sqlite3_column_text(stmt, offset + (col_count > offset + 8 ? 9 : 8)));
         
         alerts.push_back(alert);
     }
@@ -338,23 +395,67 @@ AlertRecord Database::getAlert(int alert_id) {
     sqlite3_bind_int(stmt, 1, alert_id);
 
     if (sqlite3_step(stmt) == SQLITE_ROW) {
+        int col_count = sqlite3_column_count(stmt);
         alert.id = sqlite3_column_int(stmt, 0);
         alert.channel_id = sqlite3_column_int(stmt, 1);
         alert.channel_name = reinterpret_cast<const char*>(sqlite3_column_text(stmt, 2));
         alert.alert_type = reinterpret_cast<const char*>(sqlite3_column_text(stmt, 3));
-        alert.image_path = reinterpret_cast<const char*>(sqlite3_column_text(stmt, 4));
-        alert.image_data = reinterpret_cast<const char*>(sqlite3_column_text(stmt, 5));
-        alert.confidence = sqlite3_column_double(stmt, 6);
-        alert.detected_objects = reinterpret_cast<const char*>(sqlite3_column_text(stmt, 7));
-        alert.bbox_x = sqlite3_column_double(stmt, 8);
-        alert.bbox_y = sqlite3_column_double(stmt, 9);
-        alert.bbox_w = sqlite3_column_double(stmt, 10);
-        alert.bbox_h = sqlite3_column_double(stmt, 11);
-        alert.created_at = reinterpret_cast<const char*>(sqlite3_column_text(stmt, 12));
+        // 兼容新旧数据库结构
+        if (col_count > 4) {
+            alert.alert_rule_id = sqlite3_column_int(stmt, 4);
+            if (col_count > 5) {
+                const char* rule_name = reinterpret_cast<const char*>(sqlite3_column_text(stmt, 5));
+                alert.alert_rule_name = rule_name ? rule_name : "";
+            }
+        }
+        int offset = (col_count > 5) ? 6 : 4;
+        alert.image_path = reinterpret_cast<const char*>(sqlite3_column_text(stmt, offset));
+        alert.confidence = sqlite3_column_double(stmt, offset + 1);
+        alert.detected_objects = reinterpret_cast<const char*>(sqlite3_column_text(stmt, offset + 2));
+        alert.bbox_x = sqlite3_column_double(stmt, offset + 3);
+        alert.bbox_y = sqlite3_column_double(stmt, offset + 4);
+        alert.bbox_w = sqlite3_column_double(stmt, offset + 5);
+        alert.bbox_h = sqlite3_column_double(stmt, offset + 6);
+        
+        // 兼容新旧数据库结构：检查是否有 report_status 和 report_url 字段
+        if (col_count > offset + 7) {
+            const char* report_status = reinterpret_cast<const char*>(sqlite3_column_text(stmt, offset + 7));
+            alert.report_status = report_status ? report_status : "pending";
+        } else {
+            alert.report_status = "pending";
+        }
+        if (col_count > offset + 8) {
+            const char* report_url = reinterpret_cast<const char*>(sqlite3_column_text(stmt, offset + 8));
+            alert.report_url = report_url ? report_url : "";
+        } else {
+            alert.report_url = "";
+        }
+        
+        alert.created_at = reinterpret_cast<const char*>(sqlite3_column_text(stmt, offset + (col_count > offset + 8 ? 9 : 8)));
     }
 
     sqlite3_finalize(stmt);
     return alert;
+}
+
+bool Database::updateAlertReportStatus(int alert_id, const std::string& report_status, const std::string& report_url) {
+    const char* sql = "UPDATE alerts SET report_status = ?, report_url = ? WHERE id = ?";
+    
+    sqlite3_stmt* stmt;
+    int rc = sqlite3_prepare_v2(db_, sql, -1, &stmt, nullptr);
+    if (rc != SQLITE_OK) {
+        std::cerr << "准备语句失败: " << sqlite3_errmsg(db_) << std::endl;
+        return false;
+    }
+
+    sqlite3_bind_text(stmt, 1, report_status.c_str(), -1, SQLITE_STATIC);
+    sqlite3_bind_text(stmt, 2, report_url.c_str(), -1, SQLITE_STATIC);
+    sqlite3_bind_int(stmt, 3, alert_id);
+    
+    rc = sqlite3_step(stmt);
+    sqlite3_finalize(stmt);
+
+    return rc == SQLITE_DONE;
 }
 
 int Database::getAlertCount() {

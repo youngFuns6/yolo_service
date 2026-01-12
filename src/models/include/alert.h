@@ -17,7 +17,7 @@ struct AlertRecord {
     int alert_rule_id;           // 触发的告警规则ID
     std::string alert_rule_name;  // 触发的告警规则名称
     std::string image_path;
-    std::string image_data;  // base64 encoded
+    std::string image_data;  // base64 encoded (不存储到数据库，仅用于上报)
     float confidence;
     std::string detected_objects;  // JSON string
     std::string created_at;
@@ -25,6 +25,8 @@ struct AlertRecord {
     double bbox_y;
     double bbox_w;
     double bbox_h;
+    std::string report_status;  // 上报状态: pending, success, failed
+    std::string report_url;     // 上报地址
     
     AlertRecord() : id(0), channel_id(0), alert_rule_id(0), confidence(0.0f),
                     bbox_x(0), bbox_y(0), bbox_w(0), bbox_h(0) {}
@@ -46,6 +48,7 @@ public:
     AlertRecord getAlert(int alert_id);
     int getAlertCount();
     int getAlertCountByChannel(int channel_id);
+    bool updateAlertReportStatus(int alert_id, const std::string& report_status, const std::string& report_url);
 
     // 清理旧数据
     bool cleanupOldAlerts(int days);

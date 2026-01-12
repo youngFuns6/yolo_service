@@ -6,7 +6,7 @@ import path from 'path'
 export default defineConfig({
   plugins: [react()],
   build: {
-    outDir: path.resolve(__dirname, '../build/macos-arm64-Release/website'),
+    outDir: path.resolve(__dirname, '../build/linux-x64-Release/website'),
   },
   resolve: {
     alias: {

@@ -169,6 +169,9 @@ void setupChannelRoutes(crow::SimpleApp& app,
             
             Channel channel = *existing;
             bool old_enabled = channel.enabled.load();
+            std::string old_source_url = channel.source_url;  // 保存旧的拉流地址
+            bool source_url_changed = false;  // 标记拉流地址是否变化
+            
             if (json_body.has("id")) {
                 channel.id = json_body["id"].i();
             }
@@ -176,7 +179,11 @@ void setupChannelRoutes(crow::SimpleApp& app,
                 channel.name = json_body["name"].s();
             }
             if (json_body.has("source_url")) {
-                channel.source_url = json_body["source_url"].s();
+                std::string new_source_url = json_body["source_url"].s();
+                if (new_source_url != old_source_url) {
+                    source_url_changed = true;
+                }
+                channel.source_url = new_source_url;
             }
             if (json_body.has("enabled")) {
                 channel.enabled = json_body["enabled"].b();
@@ -190,12 +197,25 @@ void setupChannelRoutes(crow::SimpleApp& app,
             
             bool success = channel_manager.updateChannel(channel_id, channel);
             
-            // 处理enabled状态变化
+            // 处理enabled状态变化和拉流地址变化
             if (success && stream_manager && detector) {
                 bool new_enabled = channel.enabled.load();
                 auto updated_channel = channel_manager.getChannel(channel_id);
                 
-                if (old_enabled != new_enabled) {
+                // 处理拉流地址变化：如果地址变化且通道启用，需要重新启动分析
+                if (source_url_changed && new_enabled) {
+                    std::cout << "ChannelAPI: 通道 " << channel_id << " 的拉流地址已变化，重新启动分析" << std::endl;
+                    // 如果通道正在运行，先停止当前分析
+                    if (stream_manager->isAnalyzing(channel_id)) {
+                        stream_manager->stopAnalysis(channel_id);
+                    }
+                    // 使用新的拉流地址重新启动分析
+                    if (updated_channel) {
+                        stream_manager->startAnalysis(channel_id, updated_channel, detector);
+                    }
+                }
+                // 处理enabled状态变化（仅在拉流地址未变化时处理，避免重复操作）
+                else if (old_enabled != new_enabled) {
                     if (new_enabled) {
                         // 启用：启动拉流分析
                         if (updated_channel) {

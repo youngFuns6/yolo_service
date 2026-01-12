@@ -199,14 +199,21 @@ function AlertList() {
 
   // 获取图片 URL
   function getImageUrl(alert: Alert) {
-    if (alert.image_data) {
-      return `data:image/jpeg;base64,${alert.image_data}`;
-    }
     if (alert.image_path) {
       // 如果后端提供了图片路径，可以拼接完整 URL
       return alert.image_path;
     }
     return "";
+  }
+
+  // 获取上报状态标签颜色
+  function getReportStatusColor(status: string) {
+    const colorMap: Record<string, string> = {
+      pending: "default",
+      success: "success",
+      failed: "error",
+    };
+    return colorMap[status.toLowerCase()] || "default";
   }
 
   const columns: ColumnsType<Alert> = [
@@ -269,6 +276,25 @@ function AlertList() {
           <div>W: {record.bbox_w.toFixed(0)}, H: {record.bbox_h.toFixed(0)}</div>
         </div>
       ),
+    },
+    {
+      title: "上报状态",
+      dataIndex: "report_status",
+      key: "report_status",
+      width: 100,
+      render: (status: string) => (
+        <Tag color={getReportStatusColor(status)}>
+          {status === "pending" ? "待上报" : status === "success" ? "已上报" : "上报失败"}
+        </Tag>
+      ),
+    },
+    {
+      title: "上报地址",
+      dataIndex: "report_url",
+      key: "report_url",
+      width: 200,
+      ellipsis: true,
+      render: (url: string) => url || "-",
     },
     {
       title: "创建时间",
@@ -472,6 +498,16 @@ function AlertList() {
                 <div style={{ marginBottom: 16 }}>
                   <strong>创建时间：</strong>
                   <div>{dayjs(viewingAlert.created_at).format("YYYY-MM-DD HH:mm:ss")}</div>
+                </div>
+                <div style={{ marginBottom: 16 }}>
+                  <strong>上报状态：</strong>
+                  <Tag color={getReportStatusColor(viewingAlert.report_status)}>
+                    {viewingAlert.report_status === "pending" ? "待上报" : viewingAlert.report_status === "success" ? "已上报" : "上报失败"}
+                  </Tag>
+                </div>
+                <div style={{ marginBottom: 16 }}>
+                  <strong>上报地址：</strong>
+                  <div>{viewingAlert.report_url || "-"}</div>
                 </div>
               </Col>
               <Col span={12}>

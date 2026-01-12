@@ -31,13 +31,14 @@ void setupAlertRoutes(crow::SimpleApp& app) {
             a["alert_rule_id"] = alert.alert_rule_id;
             a["alert_rule_name"] = alert.alert_rule_name;
             a["image_path"] = alert.image_path;
-            a["image_data"] = alert.image_data;
             a["confidence"] = alert.confidence;
             a["detected_objects"] = alert.detected_objects;
             a["bbox_x"] = alert.bbox_x;
             a["bbox_y"] = alert.bbox_y;
             a["bbox_w"] = alert.bbox_w;
             a["bbox_h"] = alert.bbox_h;
+            a["report_status"] = alert.report_status;
+            a["report_url"] = alert.report_url;
             a["created_at"] = alert.created_at;
             alert_list.push_back(a);
         }
@@ -65,14 +66,17 @@ void setupAlertRoutes(crow::SimpleApp& app) {
         response["alert"]["channel_id"] = alert.channel_id;
         response["alert"]["channel_name"] = alert.channel_name;
         response["alert"]["alert_type"] = alert.alert_type;
+        response["alert"]["alert_rule_id"] = alert.alert_rule_id;
+        response["alert"]["alert_rule_name"] = alert.alert_rule_name;
         response["alert"]["image_path"] = alert.image_path;
-        response["alert"]["image_data"] = alert.image_data;
         response["alert"]["confidence"] = alert.confidence;
         response["alert"]["detected_objects"] = alert.detected_objects;
         response["alert"]["bbox_x"] = alert.bbox_x;
         response["alert"]["bbox_y"] = alert.bbox_y;
         response["alert"]["bbox_w"] = alert.bbox_w;
         response["alert"]["bbox_h"] = alert.bbox_h;
+        response["alert"]["report_status"] = alert.report_status;
+        response["alert"]["report_url"] = alert.report_url;
         response["alert"]["created_at"] = alert.created_at;
         
         return crow::response(response);
@@ -104,13 +108,14 @@ void setupAlertRoutes(crow::SimpleApp& app) {
             a["alert_rule_id"] = alert.alert_rule_id;
             a["alert_rule_name"] = alert.alert_rule_name;
             a["image_path"] = alert.image_path;
-            a["image_data"] = alert.image_data;
             a["confidence"] = alert.confidence;
             a["detected_objects"] = alert.detected_objects;
             a["bbox_x"] = alert.bbox_x;
             a["bbox_y"] = alert.bbox_y;
             a["bbox_w"] = alert.bbox_w;
             a["bbox_h"] = alert.bbox_h;
+            a["report_status"] = alert.report_status;
+            a["report_url"] = alert.report_url;
             a["created_at"] = alert.created_at;
             alert_list.push_back(a);
         }

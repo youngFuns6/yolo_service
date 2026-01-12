@@ -5,14 +5,17 @@ export interface Alert {
   channel_id: number;
   channel_name: string;
   alert_type: string;
+  alert_rule_id?: number;
+  alert_rule_name?: string;
   image_path: string;
-  image_data: string;
   confidence: number;
   detected_objects: string;
   bbox_x: number;
   bbox_y: number;
   bbox_w: number;
   bbox_h: number;
+  report_status: string;
+  report_url: string;
   created_at: string;
 }
 
@@ -81,4 +84,8 @@ export function deleteAlert(alertId: number) {
     method: "DELETE",
   });
 }
+
+
+
+
 

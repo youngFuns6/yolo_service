@@ -25,8 +25,8 @@ struct ReportConfig {
     ReportConfig() 
         : type(ReportType::HTTP),
           mqtt_port(1883),
-          enabled(false),
-          mqtt_client_id("detector_service") {}
+          mqtt_client_id("detector_service"),
+          enabled(false) {}
 };
 
 class ReportConfigManager {
