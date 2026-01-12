@@ -2,6 +2,7 @@
 add_library(stream STATIC
     stream_manager.cpp
     frame_callback.cpp
+    rtmp_streamer.cpp
 )
 
 target_include_directories(stream PUBLIC

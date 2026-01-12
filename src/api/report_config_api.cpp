@@ -1,5 +1,6 @@
 #include "report_config_api.h"
 #include "report_config.h"
+#include "report_service.h"
 #include <iostream>
 
 namespace detector_service {
@@ -70,12 +71,67 @@ void setupReportConfigRoutes(crow::SimpleApp& app) {
                 config.mqtt_client_id = json_body["mqtt_client_id"].s();
             }
             
+            bool enabled_changed = false;
+            bool new_enabled = true;
             if (json_body.has("enabled")) {
-                config.enabled = json_body["enabled"].b();
+                new_enabled = json_body["enabled"].b();
+                config.enabled = new_enabled;
+                enabled_changed = true;
             }
             
             auto& config_manager = ReportConfigManager::getInstance();
+            
+            // 获取当前配置（用于合并更新）
+            const auto& current_config = config_manager.getReportConfig();
+            
+            // 合并配置：如果某个字段没有在请求中提供，使用当前配置的值
+            if (!json_body.has("type")) {
+                config.type = current_config.type;
+            }
+            if (!json_body.has("http_url")) {
+                config.http_url = current_config.http_url;
+            }
+            if (!json_body.has("mqtt_broker")) {
+                config.mqtt_broker = current_config.mqtt_broker;
+            }
+            if (!json_body.has("mqtt_port")) {
+                config.mqtt_port = current_config.mqtt_port;
+            }
+            if (!json_body.has("mqtt_topic")) {
+                config.mqtt_topic = current_config.mqtt_topic;
+            }
+            if (!json_body.has("mqtt_username")) {
+                config.mqtt_username = current_config.mqtt_username;
+            }
+            if (!json_body.has("mqtt_password")) {
+                config.mqtt_password = current_config.mqtt_password;
+            }
+            if (!json_body.has("mqtt_client_id")) {
+                config.mqtt_client_id = current_config.mqtt_client_id;
+            }
+            if (!json_body.has("enabled")) {
+                config.enabled = current_config.enabled.load();
+            }
+            
+            auto& report_service = ReportService::getInstance();
+            
+            // 如果配置被禁用，停止 MQTT 连接
+            if (enabled_changed && !new_enabled) {
+                report_service.stopMqttConnection();
+            }
+            
             bool success = config_manager.updateReportConfig(config);
+            
+            // 如果配置被启用且是 MQTT 类型，触发 MQTT 连接
+            if (enabled_changed && new_enabled && config.type == ReportType::MQTT) {
+                if (!config.mqtt_broker.empty() && !config.mqtt_topic.empty()) {
+                    std::cout << "上报已启用，触发 MQTT 连接..." << std::endl;
+                    report_service.triggerReconnect(config);
+                } else {
+                    std::cerr << "MQTT 配置不完整，无法连接: broker=" << config.mqtt_broker 
+                              << ", topic=" << config.mqtt_topic << std::endl;
+                }
+            }
             
             crow::json::wvalue response;
             response["success"] = success;

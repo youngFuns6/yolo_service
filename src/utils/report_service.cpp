@@ -32,12 +32,14 @@ void ReportService::on_connect(struct mosquitto* mosq, void* obj, int rc) {
         // 连接失败
         service->mqtt_connected_ = false;
         service->mqtt_connect_failed_ = true;
-        std::cerr << "MQTT 连接失败: " << mosquitto_connack_string(rc) << "，开始重连..." << std::endl;
+        std::cerr << "MQTT 连接失败: " << mosquitto_connack_string(rc) 
+                  << " (错误代码: " << rc << ")" << std::endl;
         
         // 检查是否已经在重连中
         {
             std::lock_guard<std::mutex> reconnect_lock(service->reconnect_mutex_);
             if (service->should_reconnect_.load()) {
+                std::cout << "MQTT 已在重连中，跳过重复触发" << std::endl;
                 lock.unlock();
                 return;
             }
@@ -65,13 +67,11 @@ void ReportService::on_disconnect(struct mosquitto* mosq, void* obj, int rc) {
     
     if (rc != 0) {
         // 非正常断开，启动重连线程（避免阻塞回调）
-        std::cerr << "MQTT 意外断开连接: " << mosquitto_strerror(rc) << "，开始重连..." << std::endl;
         
         // 检查是否已经在重连中
         {
             std::lock_guard<std::mutex> reconnect_lock(service->reconnect_mutex_);
             if (service->should_reconnect_.load()) {
-                std::cout << "MQTT 已在重连中，跳过重复触发" << std::endl;
                 return;
             }
             service->should_reconnect_ = true;
@@ -254,6 +254,24 @@ void ReportService::cleanup() {
     current_port_ = 0;
 }
 
+// 停止 MQTT 连接和重连（当上报被禁用时调用）
+void ReportService::stopMqttConnection() {
+    std::cout << "MQTT 停止连接和重连..." << std::endl;
+    
+    // 停止重连
+    {
+        std::lock_guard<std::mutex> reconnect_lock(reconnect_mutex_);
+        should_reconnect_ = false;
+        reconnect_config_.enabled = false;  // 标记配置为禁用
+    }
+    reconnect_cv_.notify_all();  // 唤醒重连线程，让它检查配置并退出
+    
+    // 清理 MQTT 客户端
+    cleanup();
+    
+    std::cout << "MQTT 连接和重连已停止" << std::endl;
+}
+
 // 统一的 MQTT 客户端创建和连接方法
 // 注意：调用此方法前必须已持有 mqtt_mutex_ 锁，并通过 lock 参数传入
 // 注意：此方法会在调用 mosquitto_connect 前释放锁，避免阻塞
@@ -316,13 +334,32 @@ bool ReportService::createAndConnectMqttClient(const ReportConfig& config, std::
     lock.unlock();
     
     // 连接到 broker（异步连接，但可能进行DNS解析）
+    std::cout << "MQTT 正在连接到 " << config.mqtt_broker << ":" << config.mqtt_port 
+              << " (client_id: " << client_id << ")..." << std::endl;
+    
+    // 验证 broker 地址格式（基本检查）
+    if (config.mqtt_broker.empty()) {
+        std::cerr << "MQTT 连接失败: broker 地址为空" << std::endl;
+        lock.lock();
+        if (mqtt_client_ != nullptr) {
+            mosquitto_loop_stop(mqtt_client_, false);
+            mosquitto_destroy(mqtt_client_);
+            mqtt_client_ = nullptr;
+        }
+        lock.unlock();
+        return false;
+    }
+    
     rc = mosquitto_connect(mqtt_client_, 
                            config.mqtt_broker.c_str(), 
                            config.mqtt_port, 
                            60); // keepalive 60秒
     
     if (rc != MOSQ_ERR_SUCCESS) {
-        std::cerr << "MQTT 失败: 连接失败 - " << mosquitto_strerror(rc) << std::endl;
+        std::cerr << "MQTT 连接失败: " << mosquitto_strerror(rc) 
+                  << " (错误代码: " << rc << ")" << std::endl;
+        std::cerr << "  broker: " << config.mqtt_broker 
+                  << ", port: " << config.mqtt_port << std::endl;
         // 需要重新获取锁来清理资源
         lock.lock();
         if (mqtt_client_ != nullptr) {
@@ -334,12 +371,18 @@ bool ReportService::createAndConnectMqttClient(const ReportConfig& config, std::
         return false;
     }
     
+    std::cout << "MQTT 连接请求已发送，等待连接结果..." << std::endl;
     // 不等待连接结果，立即返回（连接结果通过回调处理）
     // 这样可以避免阻塞调用线程
     return true;
 }
 
 struct mosquitto* ReportService::getOrCreateMqttClient(const ReportConfig& config) {
+    // 检查配置是否有效
+    if (config.mqtt_broker.empty() || config.mqtt_topic.empty() || !config.enabled.load()) {
+        return nullptr;
+    }
+    
     // 快速检查连接状态，不持有锁过久
     {
         std::lock_guard<std::mutex> lock(mqtt_mutex_);
@@ -352,23 +395,83 @@ struct mosquitto* ReportService::getOrCreateMqttClient(const ReportConfig& confi
         }
     }
     
-    // 保存配置以便重连时使用（在锁外进行，避免阻塞）
+    // 客户端未连接或不存在，立即尝试创建和连接（首次连接，不使用重连延迟）
+    std::unique_lock<std::mutex> lock(mqtt_mutex_);
+    
+    // 再次检查是否在获取锁的过程中已经连接成功
+    if (mqtt_client_ != nullptr && 
+        mqtt_connected_ && 
+        current_broker_ == config.mqtt_broker && 
+        current_port_ == config.mqtt_port) {
+        return mqtt_client_;
+    }
+    
+    // 保存配置以便重连时使用
     {
         std::lock_guard<std::mutex> reconnect_lock(reconnect_mutex_);
         reconnect_config_ = createReconnectConfig(config);
-        // 触发重连线程（如果还没有运行）
-        if (!should_reconnect_.load()) {
-            should_reconnect_ = true;
-            // 在后台线程中执行重连，避免阻塞
-            std::thread([this]() {
-                performReconnect();
-            }).detach();
-        }
     }
     
-    // 客户端未连接或不存在，立即返回 nullptr
-    // 所有连接操作都在后台线程中进行，不会阻塞调用线程
-    return nullptr;
+    // 立即尝试创建和连接（首次连接，不使用重连延迟）
+    std::cout << "MQTT 首次连接或配置变更，立即尝试连接..." << std::endl;
+    bool result = createAndConnectMqttClient(config, lock);
+    // 注意：createAndConnectMqttClient 内部已经释放了锁
+    
+    if (result) {
+        // 连接请求已发送，等待连接结果（最多等待3秒）
+        std::cout << "MQTT 连接请求已发送，等待连接结果..." << std::endl;
+        for (int i = 0; i < 30; ++i) {  // 30 * 100ms = 3秒
+            std::this_thread::sleep_for(std::chrono::milliseconds(100));
+            {
+                std::lock_guard<std::mutex> check_lock(mqtt_mutex_);
+                if (mqtt_connected_ && mqtt_client_ != nullptr &&
+                    current_broker_ == config.mqtt_broker && 
+                    current_port_ == config.mqtt_port) {
+                    std::cout << "MQTT 连接成功" << std::endl;
+                    return mqtt_client_;
+                }
+                if (mqtt_connect_failed_) {
+                    std::cerr << "MQTT 连接失败，将触发重连线程..." << std::endl;
+                    // 连接失败，触发重连线程（使用重连延迟）
+                    {
+                        std::lock_guard<std::mutex> reconnect_lock(reconnect_mutex_);
+                        if (!should_reconnect_.load()) {
+                            should_reconnect_ = true;
+                            std::thread([this]() {
+                                performReconnect();
+                            }).detach();
+                        }
+                    }
+                    return nullptr;
+                }
+            }
+        }
+        // 连接超时，触发重连线程
+        std::cerr << "MQTT 连接超时，将触发重连线程..." << std::endl;
+        {
+            std::lock_guard<std::mutex> reconnect_lock(reconnect_mutex_);
+            if (!should_reconnect_.load()) {
+                should_reconnect_ = true;
+                std::thread([this]() {
+                    performReconnect();
+                }).detach();
+            }
+        }
+        return nullptr;
+    } else {
+        // 创建失败，触发重连线程
+        std::cerr << "MQTT 客户端创建失败，将触发重连线程..." << std::endl;
+        {
+            std::lock_guard<std::mutex> reconnect_lock(reconnect_mutex_);
+            if (!should_reconnect_.load()) {
+                should_reconnect_ = true;
+                std::thread([this]() {
+                    performReconnect();
+                }).detach();
+            }
+        }
+        return nullptr;
+    }
 }
 
 void ReportService::releaseMqttClient() {
@@ -389,6 +492,7 @@ void ReportService::releaseMqttClient() {
 
 bool ReportService::reportViaMqtt(const AlertRecord& alert, const ReportConfig& config) {
     if (config.mqtt_broker.empty() || config.mqtt_topic.empty()) {
+        std::cerr << "MQTT 上报失败: broker 或 topic 为空" << std::endl;
         return false;
     }
     
@@ -396,8 +500,19 @@ bool ReportService::reportViaMqtt(const AlertRecord& alert, const ReportConfig& 
     std::string json_str = buildAlertJson(alert);
     
     // 获取或创建 MQTT 客户端
+    // getOrCreateMqttClient 内部已经会等待连接建立（最多3秒），所以这里直接使用结果
     struct mosquitto* client = getOrCreateMqttClient(config);
+    
+    // 如果客户端仍然未连接，说明连接失败或超时
+    // getOrCreateMqttClient 已经触发了重连线程，这里直接返回失败
     if (client == nullptr) {
+        std::cerr << "MQTT 客户端未连接，无法上报消息" << std::endl;
+        std::cerr << "  如果这是首次连接，请检查:" << std::endl;
+        std::cerr << "  - MQTT broker 地址和端口是否正确: " << config.mqtt_broker << ":" << config.mqtt_port << std::endl;
+        std::cerr << "  - 网络是否能够访问 broker" << std::endl;
+        std::cerr << "  - broker 服务是否正在运行" << std::endl;
+        std::cerr << "  - 用户名和密码是否正确（如果配置了）" << std::endl;
+        std::cerr << "  重连线程已启动，将在后台持续尝试重连" << std::endl;
         return false;
     }
     
@@ -411,6 +526,8 @@ bool ReportService::reportViaMqtt(const AlertRecord& alert, const ReportConfig& 
                                false);  // retain
     
     if (rc != MOSQ_ERR_SUCCESS) {
+        // std::cerr << "MQTT 发布失败: " << mosquitto_strerror(rc) 
+        //           << " (错误代码: " << rc << ")" << std::endl;
         // 如果发布失败，可能是连接断开，释放客户端并触发重连
         std::unique_lock<std::mutex> lock(mqtt_mutex_);
         releaseMqttClient();
@@ -421,6 +538,8 @@ bool ReportService::reportViaMqtt(const AlertRecord& alert, const ReportConfig& 
         }
         return false;
     }
+    
+    // std::cout << "MQTT 消息发布成功: topic=" << config.mqtt_topic << std::endl;
     return true;
 }
 
@@ -451,9 +570,7 @@ void ReportService::reconnectWorker() {
         int attempt = 0;
         // 持续重连直到连接成功、配置无效或线程停止
         while (reconnect_thread_running_.load()) {
-            std::cout << "MQTT 重连循环迭代开始，attempt=" << attempt << std::endl;
-            
-            // 检查配置是否仍然有效
+            // 检查配置是否仍然有效（在每次循环开始时检查）
             bool config_valid = false;
             {
                 std::lock_guard<std::mutex> reconnect_lock(reconnect_mutex_);
@@ -461,22 +578,24 @@ void ReportService::reconnectWorker() {
                 config_valid = (!config.mqtt_broker.empty() && 
                                !config.mqtt_topic.empty() && 
                                config.enabled);
-                // 如果配置无效，清除重连标志并退出
+                // 如果配置无效或被禁用，清除重连标志并退出
                 if (!config_valid) {
                     should_reconnect_ = false;
-                    std::cerr << "MQTT 重连配置无效，停止重连" << std::endl;
-                    std::cerr << "  broker: " << config.mqtt_broker << std::endl;
-                    std::cerr << "  topic: " << config.mqtt_topic << std::endl;
-                    std::cerr << "  enabled: " << config.enabled << std::endl;
+                    std::cout << "MQTT 重连配置无效或已禁用，停止重连" << std::endl;
+                    std::cout << "  broker: " << config.mqtt_broker << std::endl;
+                    std::cout << "  topic: " << config.mqtt_topic << std::endl;
+                    std::cout << "  enabled: " << config.enabled << std::endl;
                     break;
                 }
-                // 确保 should_reconnect_ 保持为 true（如果配置有效）
-                // 这确保在服务器重启后能继续重连
+                // 如果 should_reconnect_ 被清除但配置有效，说明可能是外部触发了停止
+                // 这种情况下也应该退出
                 if (!should_reconnect_.load()) {
-                    std::cout << "MQTT 重连标志被清除，重新设置" << std::endl;
-                    should_reconnect_ = true;
+                    std::cout << "MQTT 重连标志被清除，停止重连" << std::endl;
+                    break;
                 }
             }
+            
+            std::cout << "MQTT 重连循环迭代开始，attempt=" << attempt << std::endl;
             
             std::cout << "MQTT 配置检查完成，config_valid=" << config_valid << std::endl;
             
@@ -577,18 +696,7 @@ void ReportService::performReconnect() {
             }
         }
         
-        // 计算延迟时间（指数退避）
-        int delay_ms = (1 << reconnect_attempts) * 1000;  // 2^attempts 秒
-        if (delay_ms > 60000) delay_ms = 60000;  // 最大延迟60秒
-        
-        std::cout << "尝试 MQTT 重连 (" << reconnect_attempts + 1 
-                  << "/" << max_reconnect_attempts 
-                  << ")，等待 " << delay_ms/1000 << " 秒..." << std::endl;
-        
-        // 等待延迟时间
-        std::this_thread::sleep_for(std::chrono::milliseconds(delay_ms));
-        
-        // 检查配置是否有效
+        // 检查配置是否有效（在延迟之前检查，以便在日志中显示）
         ReconnectConfig config;
         {
             std::lock_guard<std::mutex> reconnect_lock(reconnect_mutex_);
@@ -600,31 +708,105 @@ void ReportService::performReconnect() {
             }
         }
         
+        // 计算延迟时间（指数退避）
+        int delay_ms = (1 << reconnect_attempts) * 1000;  // 2^attempts 秒
+        if (delay_ms > 60000) delay_ms = 60000;  // 最大延迟60秒
+        
+        std::cout << "尝试 MQTT 重连 (" << reconnect_attempts + 1 
+                  << "/" << max_reconnect_attempts 
+                  << ")，等待 " << delay_ms/1000 << " 秒..." << std::endl;
+        std::cout << "  目标: " << config.mqtt_broker << ":" << config.mqtt_port 
+                  << ", topic: " << config.mqtt_topic << std::endl;
+        
+        // 等待延迟时间（分段等待，以便快速响应配置变化）
+        const int check_interval_ms = 500;  // 每500ms检查一次
+        int waited_ms = 0;
+        while (waited_ms < delay_ms && reconnect_thread_running_.load()) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(check_interval_ms));
+            waited_ms += check_interval_ms;
+            
+            // 检查配置是否仍然有效
+            {
+                std::lock_guard<std::mutex> reconnect_lock(reconnect_mutex_);
+                if (!reconnect_config_.enabled || 
+                    reconnect_config_.mqtt_broker.empty() || 
+                    reconnect_config_.mqtt_topic.empty()) {
+                    std::cout << "MQTT 配置已禁用，停止重连" << std::endl;
+                    should_reconnect_ = false;
+                    return;
+                }
+            }
+        }
+        
+        // 再次检查配置（在重连前）
+        {
+            std::lock_guard<std::mutex> reconnect_lock(reconnect_mutex_);
+            if (!reconnect_config_.enabled || 
+                reconnect_config_.mqtt_broker.empty() || 
+                reconnect_config_.mqtt_topic.empty()) {
+                std::cout << "MQTT 配置已禁用，停止重连" << std::endl;
+                should_reconnect_ = false;
+                return;
+            }
+            config = reconnect_config_;  // 更新配置
+        }
+        
         // 尝试重连
         std::unique_lock<std::mutex> lock(mqtt_mutex_);
         
         // 如果客户端存在，尝试使用 mosquitto_reconnect
         if (mqtt_client_ != nullptr) {
+            std::cout << "MQTT 尝试使用现有客户端重连..." << std::endl;
             int rc = mosquitto_reconnect(mqtt_client_);
             if (rc == MOSQ_ERR_SUCCESS) {
                 std::cout << "MQTT 重连请求已发送，等待连接结果..." << std::endl;
                 reconnect_attempts = 0;
                 lock.unlock();
-                // 等待一小段时间让连接完成
-                std::this_thread::sleep_for(std::chrono::milliseconds(500));
-                // 检查连接状态
-                {
-                    std::lock_guard<std::mutex> check_lock(mqtt_mutex_);
-                    if (mqtt_connected_) {
-                        std::cout << "MQTT 重连成功" << std::endl;
-                        std::lock_guard<std::mutex> reconnect_lock(reconnect_mutex_);
-                        should_reconnect_ = false;
-                        return;
+                
+                // 等待连接结果，最多等待 10 秒
+                bool connected = false;
+                for (int i = 0; i < 20; ++i) {  // 20 * 500ms = 10秒
+                    std::this_thread::sleep_for(std::chrono::milliseconds(500));
+                    {
+                        std::lock_guard<std::mutex> check_lock(mqtt_mutex_);
+                        if (mqtt_connected_) {
+                            std::cout << "MQTT 重连成功" << std::endl;
+                            connected = true;
+                            break;
+                        }
+                        if (mqtt_connect_failed_) {
+                            std::cerr << "MQTT 重连失败，连接被拒绝" << std::endl;
+                            break;
+                        }
+                    }
+                }
+                
+                if (connected) {
+                    std::lock_guard<std::mutex> reconnect_lock(reconnect_mutex_);
+                    should_reconnect_ = false;
+                    return;
+                } else {
+                    // 重连失败，清理客户端以便重新创建
+                    std::lock_guard<std::mutex> cleanup_lock(mqtt_mutex_);
+                    if (mqtt_client_ != nullptr) {
+                        std::cout << "MQTT 重连超时或失败，清理客户端以便重新创建..." << std::endl;
+                        mosquitto_disconnect(mqtt_client_);
+                        mosquitto_loop_stop(mqtt_client_, false);
+                        mosquitto_destroy(mqtt_client_);
+                        mqtt_client_ = nullptr;
                     }
                 }
             } else {
-                std::cerr << "MQTT 重连失败: " << mosquitto_strerror(rc) << std::endl;
-                // 如果 reconnect 失败，可能需要重新创建客户端
+                std::cerr << "MQTT 重连失败: " << mosquitto_strerror(rc) 
+                          << " (错误代码: " << rc << ")" << std::endl;
+                // 如果 reconnect 失败，清理客户端以便重新创建
+                if (mqtt_client_ != nullptr) {
+                    std::cout << "MQTT 清理失败的客户端，准备重新创建..." << std::endl;
+                    mosquitto_disconnect(mqtt_client_);
+                    mosquitto_loop_stop(mqtt_client_, false);
+                    mosquitto_destroy(mqtt_client_);
+                    mqtt_client_ = nullptr;
+                }
                 lock.unlock();
             }
         } else {
@@ -641,26 +823,42 @@ void ReportService::performReconnect() {
             
             // createAndConnectMqttClient 内部会释放锁，所以这里需要重新获取锁
             lock.lock();
+            std::cout << "MQTT 重新创建客户端并连接..." << std::endl;
             bool result = createAndConnectMqttClient(report_config, lock);
             // 注意：createAndConnectMqttClient 内部已经释放了锁，所以这里不需要再次解锁
             
             if (result) {
                 std::cout << "MQTT 客户端重新创建成功，等待连接结果..." << std::endl;
                 reconnect_attempts = 0;
-                // 等待一小段时间让连接完成（在锁外等待，避免阻塞）
-                lock.unlock();
-                std::this_thread::sleep_for(std::chrono::milliseconds(500));
-                // 检查连接状态
-                {
-                    std::lock_guard<std::mutex> check_lock(mqtt_mutex_);
-                    if (mqtt_connected_) {
-                        std::cout << "MQTT 重连成功" << std::endl;
-                        std::lock_guard<std::mutex> reconnect_lock(reconnect_mutex_);
-                        should_reconnect_ = false;
-                        return;
+                
+                // 等待连接结果，最多等待 10 秒
+                bool connected = false;
+                for (int i = 0; i < 20; ++i) {  // 20 * 500ms = 10秒
+                    std::this_thread::sleep_for(std::chrono::milliseconds(500));
+                    {
+                        std::lock_guard<std::mutex> check_lock(mqtt_mutex_);
+                        if (mqtt_connected_) {
+                            std::cout << "MQTT 重连成功" << std::endl;
+                            connected = true;
+                            break;
+                        }
+                        if (mqtt_connect_failed_) {
+                            std::cerr << "MQTT 连接失败: broker=" << config.mqtt_broker 
+                                      << ", port=" << config.mqtt_port << std::endl;
+                            break;
+                        }
                     }
                 }
+                
+                if (connected) {
+                    std::lock_guard<std::mutex> reconnect_lock(reconnect_mutex_);
+                    should_reconnect_ = false;
+                    return;
+                } else {
+                    std::cerr << "MQTT 连接超时或失败，将在下次重试时重新尝试" << std::endl;
+                }
             } else {
+                std::cerr << "MQTT 客户端创建失败，将在下次重试时重新尝试" << std::endl;
                 // 如果创建失败，锁已经被 createAndConnectMqttClient 释放了
                 // 不需要再次解锁
             }

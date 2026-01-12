@@ -85,271 +85,8 @@ bool StreamManager::initFFmpegPushStream(StreamContext* context,
         return false;
     }
     
-    // 初始化FFmpeg（如果还没有初始化）
-    avformat_network_init();
-    
-    // 分配输出格式上下文
-    int ret = avformat_alloc_output_context2(&context->fmt_ctx, nullptr, "flv", rtmp_url.c_str());
-    if (ret < 0 || !context->fmt_ctx) {
-        std::cerr << "无法创建输出格式上下文: " << avErrorToString(ret) << std::endl;
-        return false;
-    }
-    
-    // 查找H.264编码器
-    const AVCodec* codec = avcodec_find_encoder(AV_CODEC_ID_H264);
-    if (!codec) {
-        std::cerr << "找不到H.264编码器" << std::endl;
-        avformat_free_context(context->fmt_ctx);
-        context->fmt_ctx = nullptr;
-        return false;
-    }
-    
-    // 创建编码器上下文
-    context->codec_ctx = avcodec_alloc_context3(codec);
-    if (!context->codec_ctx) {
-        std::cerr << "无法分配编码器上下文" << std::endl;
-        avformat_free_context(context->fmt_ctx);
-        context->fmt_ctx = nullptr;
-        return false;
-    }
-    
-    // 设置编码器参数
-    context->codec_ctx->codec_id = AV_CODEC_ID_H264;
-    context->codec_ctx->codec_type = AVMEDIA_TYPE_VIDEO;
-    context->codec_ctx->pix_fmt = AV_PIX_FMT_YUV420P;
-    context->codec_ctx->width = width;
-    context->codec_ctx->height = height;
-    context->codec_ctx->time_base = {1, fps};
-    context->codec_ctx->framerate = {fps, 1};
-    context->codec_ctx->gop_size = fps * 2;  // 关键帧间隔：2秒
-    context->codec_ctx->max_b_frames = 0;    // 不使用B帧，降低延迟
-    
-    // 设置比特率
-    if (bitrate.has_value() && bitrate.value() > 0) {
-        context->codec_ctx->bit_rate = bitrate.value();
-    } else {
-        // 默认比特率：根据分辨率估算
-        context->codec_ctx->bit_rate = width * height * fps / 10;
-    }
-    
-    // 设置编码器预设（快速编码，低延迟）
-    AVDictionary* opts = nullptr;
-    av_dict_set(&opts, "preset", "ultrafast", 0);
-    av_dict_set(&opts, "tune", "zerolatency", 0);
-    av_dict_set(&opts, "profile", "baseline", 0);
-    // 强制第一个帧为关键帧
-    av_dict_set(&opts, "force_key_frames", "expr:gte(n,0)", 0);
-    
-    // 打开编码器
-    ret = avcodec_open2(context->codec_ctx, codec, &opts);
-    av_dict_free(&opts);
-    if (ret < 0) {
-        std::cerr << "无法打开编码器: " << avErrorToString(ret) << std::endl;
-        avcodec_free_context(&context->codec_ctx);
-        avformat_free_context(context->fmt_ctx);
-        context->fmt_ctx = nullptr;
-        return false;
-    }
-    
-    // 创建输出流
-    AVStream* stream = avformat_new_stream(context->fmt_ctx, codec);
-    if (!stream) {
-        std::cerr << "无法创建输出流" << std::endl;
-        avcodec_free_context(&context->codec_ctx);
-        avformat_free_context(context->fmt_ctx);
-        context->fmt_ctx = nullptr;
-        return false;
-    }
-    
-    // 复制编码器参数到流
-    ret = avcodec_parameters_from_context(stream->codecpar, context->codec_ctx);
-    if (ret < 0) {
-        std::cerr << "无法复制编码器参数: " << avErrorToString(ret) << std::endl;
-        avcodec_free_context(&context->codec_ctx);
-        avformat_free_context(context->fmt_ctx);
-        context->fmt_ctx = nullptr;
-        return false;
-    }
-    
-    // 设置流的时间基与编码器一致
-    stream->time_base = context->codec_ctx->time_base;
-    
-    // 分配帧（在打开连接之前分配，用于生成extradata）
-    context->frame = av_frame_alloc();
-    context->frame_yuv = av_frame_alloc();
-    context->pkt = av_packet_alloc();
-    
-    if (!context->frame || !context->frame_yuv || !context->pkt) {
-        std::cerr << "无法分配帧或数据包" << std::endl;
-        avcodec_free_context(&context->codec_ctx);
-        avformat_free_context(context->fmt_ctx);
-        context->fmt_ctx = nullptr;
-        return false;
-    }
-    
-    // 设置帧参数
-    context->frame->format = AV_PIX_FMT_BGR24;  // OpenCV使用BGR格式
-    context->frame->width = width;
-    context->frame->height = height;
-    ret = av_frame_get_buffer(context->frame, 32);
-    if (ret < 0) {
-        std::cerr << "无法为帧分配缓冲区: " << avErrorToString(ret) << std::endl;
-        av_frame_free(&context->frame);
-        av_frame_free(&context->frame_yuv);
-        av_packet_free(&context->pkt);
-        avcodec_free_context(&context->codec_ctx);
-        avformat_free_context(context->fmt_ctx);
-        context->fmt_ctx = nullptr;
-        return false;
-    }
-    
-    context->frame_yuv->format = AV_PIX_FMT_YUV420P;
-    context->frame_yuv->width = width;
-    context->frame_yuv->height = height;
-    ret = av_frame_get_buffer(context->frame_yuv, 32);
-    if (ret < 0) {
-        std::cerr << "无法为YUV帧分配缓冲区: " << avErrorToString(ret) << std::endl;
-        av_frame_free(&context->frame);
-        av_frame_free(&context->frame_yuv);
-        av_packet_free(&context->pkt);
-        avcodec_free_context(&context->codec_ctx);
-        avformat_free_context(context->fmt_ctx);
-        context->fmt_ctx = nullptr;
-        return false;
-    }
-    
-    // 创建颜色空间转换上下文（BGR -> YUV420P）
-    context->sws_ctx = sws_getContext(
-        width, height, AV_PIX_FMT_BGR24,
-        width, height, AV_PIX_FMT_YUV420P,
-        SWS_BILINEAR, nullptr, nullptr, nullptr
-    );
-    if (!context->sws_ctx) {
-        std::cerr << "无法创建颜色空间转换上下文" << std::endl;
-        av_frame_free(&context->frame);
-        av_frame_free(&context->frame_yuv);
-        av_packet_free(&context->pkt);
-        avcodec_free_context(&context->codec_ctx);
-        avformat_free_context(context->fmt_ctx);
-        context->fmt_ctx = nullptr;
-        return false;
-    }
-    
-    // 生成extradata：编码一个测试帧来触发编码器生成SPS/PPS
-    // 创建一个全黑的测试帧
-    memset(context->frame_yuv->data[0], 0, context->frame_yuv->linesize[0] * height);
-    memset(context->frame_yuv->data[1], 128, context->frame_yuv->linesize[1] * height / 2);
-    memset(context->frame_yuv->data[2], 128, context->frame_yuv->linesize[2] * height / 2);
-    
-    // 测试帧的PTS设置为AV_NOPTS_VALUE，因为这只是用来生成extradata的
-    context->frame_yuv->pts = AV_NOPTS_VALUE;
-    context->frame_yuv->pict_type = AV_PICTURE_TYPE_I;  // 强制为关键帧
-    
-    // 发送测试帧到编码器
-    ret = avcodec_send_frame(context->codec_ctx, context->frame_yuv);
-    if (ret < 0 && ret != AVERROR(EAGAIN)) {
-        std::cerr << "发送测试帧失败: " << avErrorToString(ret) << std::endl;
-        cleanupFFmpegPushStream(context);
-        return false;
-    }
-    
-    // 接收编码后的数据包（用于生成extradata）
-    bool extradata_generated = false;
-    while (ret >= 0) {
-        ret = avcodec_receive_packet(context->codec_ctx, context->pkt);
-        if (ret == AVERROR(EAGAIN) || ret == AVERROR_EOF) {
-            break;
-        } else if (ret < 0) {
-            break;
-        }
-        
-        // 如果编码器已经生成了extradata，更新流参数
-        if (context->codec_ctx->extradata && context->codec_ctx->extradata_size > 0) {
-            // 更新流参数，确保extradata正确设置
-            ret = avcodec_parameters_from_context(stream->codecpar, context->codec_ctx);
-            if (ret < 0) {
-                std::cerr << "无法更新编码器参数: " << avErrorToString(ret) << std::endl;
-                av_packet_unref(context->pkt);
-                cleanupFFmpegPushStream(context);
-                return false;
-            }
-            extradata_generated = true;
-        }
-        
-        av_packet_unref(context->pkt);
-    }
-    
-    // 如果extradata还没有生成，尝试从编码器上下文直接获取
-    if (!extradata_generated && context->codec_ctx->extradata && context->codec_ctx->extradata_size > 0) {
-        ret = avcodec_parameters_from_context(stream->codecpar, context->codec_ctx);
-        if (ret < 0) {
-            std::cerr << "无法更新编码器参数: " << avErrorToString(ret) << std::endl;
-            cleanupFFmpegPushStream(context);
-            return false;
-        }
-        extradata_generated = true;
-    }
-    
-    // 验证extradata是否已设置
-    if (!stream->codecpar->extradata || stream->codecpar->extradata_size == 0) {
-        std::cerr << "警告: 编码器未生成extradata，可能导致RTMP服务器无法解析H264配置" << std::endl;
-        // 继续执行，让FFmpeg在写入文件头时处理
-    } else {
-        std::cout << "H264 extradata已生成 (大小: " << stream->codecpar->extradata_size << " 字节)" << std::endl;
-    }
-    
-    // 打开输出URL
-    if (!(context->fmt_ctx->oformat->flags & AVFMT_NOFILE)) {
-        std::cout << "正在连接到RTMP服务器: " << rtmp_url << std::endl;
-        ret = avio_open(&context->fmt_ctx->pb, rtmp_url.c_str(), AVIO_FLAG_WRITE);
-        if (ret < 0) {
-            std::string error_msg = avErrorToString(ret);
-            std::cerr << "无法打开输出URL: " << error_msg << " (错误码: " << ret << ")" << std::endl;
-            std::cerr << "RTMP连接失败的可能原因：" << std::endl;
-            std::cerr << "  1. RTMP服务器地址不正确或不可达" << std::endl;
-            std::cerr << "  2. RTMP服务器未运行或端口被防火墙阻止" << std::endl;
-            std::cerr << "  3. RTMP URL格式错误（应为: rtmp://host:port/app/stream）" << std::endl;
-            std::cerr << "  4. 网络连接问题" << std::endl;
-            if (error_msg.find("Connection refused") != std::string::npos) {
-                std::cerr << "  提示: 连接被拒绝，请检查RTMP服务器是否正在运行" << std::endl;
-            } else if (error_msg.find("No route to host") != std::string::npos) {
-                std::cerr << "  提示: 无法路由到主机，请检查网络连接和防火墙设置" << std::endl;
-            } else if (error_msg.find("Connection timed out") != std::string::npos) {
-                std::cerr << "  提示: 连接超时，请检查RTMP服务器地址和端口" << std::endl;
-            }
-            cleanupFFmpegPushStream(context);
-            return false;
-        }
-        std::cout << "RTMP服务器连接成功" << std::endl;
-    }
-    
-    // 设置FLV/RTMP选项
-    AVDictionary* format_opts = nullptr;
-    // 设置FLV标志：不写入duration和filesize（适用于实时流）
-    av_dict_set(&format_opts, "flvflags", "no_duration_filesize", 0);
-    // 设置RTMP选项：低延迟
-    av_dict_set(&format_opts, "rtmp_live", "live", 0);
-    // 设置缓冲区大小
-    av_dict_set_int(&format_opts, "buffer_size", 131072, 0);  // 128KB
-    // 设置RTMP推流超时（毫秒）
-    av_dict_set_int(&format_opts, "rtmp_timeout", 5000, 0);
-    // 设置RTMP应用名称（如果需要）
-    // av_dict_set(&format_opts, "rtmp_app", "rtmp", 0);
-    
-    // 写入文件头
-    ret = avformat_write_header(context->fmt_ctx, &format_opts);
-    av_dict_free(&format_opts);
-    if (ret < 0) {
-        std::cerr << "无法写入文件头: " << avErrorToString(ret) << std::endl;
-        cleanupFFmpegPushStream(context);
-        return false;
-    }
-    
-    // 初始化时间戳和开始时间
-    context->pts = 0;
-    context->push_start_time = std::chrono::steady_clock::now();
-    context->first_frame_sent = false;
-    return true;
+    // 使用 RTMPStreamer 初始化推流
+    return context->rtmp_streamer.initialize(rtmp_url, width, height, fps, bitrate);
 }
 
 /**
@@ -361,73 +98,9 @@ void StreamManager::cleanupFFmpegPushStream(StreamContext* context) {
         return;
     }
     
-    // 写入文件尾（如果连接仍然有效）
-    if (context->fmt_ctx) {
-        // 检查连接状态：如果 pb 存在且没有错误标志，尝试写入文件尾
-        bool connection_valid = false;
-        if (context->fmt_ctx->pb) {
-            // 检查 IO 上下文是否有效（没有错误标志）
-            if (!(context->fmt_ctx->pb->error)) {
-                connection_valid = true;
-            }
-        }
-        
-        if (connection_valid) {
-            int ret = av_write_trailer(context->fmt_ctx);
-            if (ret < 0) {
-                std::string error_msg = avErrorToString(ret);
-                // 检查是否是连接相关的错误
-                if (ret == AVERROR(EPIPE) || ret == AVERROR(ECONNRESET) || 
-                    error_msg.find("Broken pipe") != std::string::npos ||
-                    error_msg.find("Connection reset") != std::string::npos ||
-                    error_msg.find("Connection refused") != std::string::npos) {
-                    // 连接已断开，这是正常情况，不输出错误日志
-                    std::cout << "RTMP推流连接已断开，正常关闭推流" << std::endl;
-                } else {
-                    // 其他错误，输出详细信息用于诊断
-                    std::cerr << "写入文件尾失败: " << error_msg 
-                              << " (错误码: " << ret << ")" << std::endl;
-                }
-            } else {
-                std::cout << "RTMP推流文件尾写入成功" << std::endl;
-            }
-        } else {
-            // 连接已无效，直接跳过写入文件尾
-            std::cout << "RTMP推流连接已断开，跳过写入文件尾" << std::endl;
-        }
-    }
-    
-    // 关闭输出
-    if (context->fmt_ctx && context->fmt_ctx->pb) {
-        avio_closep(&context->fmt_ctx->pb);
-    }
-    
-    // 释放颜色空间转换上下文
-    if (context->sws_ctx) {
-        sws_freeContext(context->sws_ctx);
-        context->sws_ctx = nullptr;
-    }
-    
-    // 释放帧
-    if (context->frame) {
-        av_frame_free(&context->frame);
-    }
-    if (context->frame_yuv) {
-        av_frame_free(&context->frame_yuv);
-    }
-    if (context->pkt) {
-        av_packet_free(&context->pkt);
-    }
-    
-    // 释放编码器上下文
-    if (context->codec_ctx) {
-        avcodec_free_context(&context->codec_ctx);
-    }
-    
-    // 释放格式上下文
-    if (context->fmt_ctx) {
-        avformat_free_context(context->fmt_ctx);
-        context->fmt_ctx = nullptr;
+    // 使用 RTMPStreamer 关闭推流
+    if (context->rtmp_streamer.isInitialized()) {
+        context->rtmp_streamer.close();
     }
 }
 
@@ -483,7 +156,7 @@ StreamManager::~StreamManager() {
             context->push_reconnect_attempts = 0;
             
             // 释放推流资源
-            if (context->push_stream_enabled && context->fmt_ctx) {
+            if (context->push_stream_enabled && context->rtmp_streamer.isInitialized()) {
                 cleanupFFmpegPushStream(context.get());
             }
         }
@@ -594,7 +267,7 @@ bool StreamManager::stopAnalysis(int channel_id) {
     context_ref->push_reconnect_attempts = 0;
     
     // 释放推流资源
-    if (context_ref->push_stream_enabled && context_ref->fmt_ctx) {
+    if (context_ref->push_stream_enabled && context_ref->rtmp_streamer.isInitialized()) {
         cleanupFFmpegPushStream(context_ref.get());
         std::cout << "通道 " << channel_id << " RTMP推流已停止" << std::endl;
     }
@@ -920,7 +593,7 @@ void StreamManager::streamWorker(int channel_id, std::shared_ptr<Channel> channe
         }
         
         // 推流处理：如果通道推流状态开启，则进行推流
-        if (context->push_stream_enabled && context->fmt_ctx && context->codec_ctx) {
+        if (context->push_stream_enabled && context->rtmp_streamer.isInitialized()) {
             // 根据检测状态决定推流内容
             cv::Mat frame_to_push;
             // 如果通道启用了检测功能（enabled=true），推送分析后的视频数据
@@ -942,146 +615,40 @@ void StreamManager::streamWorker(int channel_id, std::shared_ptr<Channel> channe
                 frame_to_push = resized_frame;
             }
             
-            // 将OpenCV Mat转换为AVFrame并推流
+            // 使用 RTMPStreamer 推送帧
             if (frame_to_push.cols == context->push_width && 
                 frame_to_push.rows == context->push_height &&
                 frame_to_push.type() == CV_8UC3) {
                 
-                // 确保frame是可写的
-                if (av_frame_make_writable(context->frame) < 0) {
-                    continue;
-                }
-                
-                // 复制BGR数据到AVFrame
-                const uint8_t* src_data[1] = {frame_to_push.data};
-                int src_linesize[1] = {static_cast<int>(frame_to_push.step[0])};
-                av_image_copy(context->frame->data, context->frame->linesize,
-                             src_data, src_linesize,
-                             AV_PIX_FMT_BGR24, context->push_width, context->push_height);
-                
-                // 转换BGR到YUV420P
-                sws_scale(context->sws_ctx,
-                          (const uint8_t* const*)context->frame->data, context->frame->linesize,
-                          0, context->push_height,
-                          context->frame_yuv->data, context->frame_yuv->linesize);
-                
-                // 计算基于实际时间的时间戳
-                auto current_time = std::chrono::steady_clock::now();
-                auto elapsed = std::chrono::duration_cast<std::chrono::microseconds>(
-                    current_time - context->push_start_time).count();
-                // 将微秒转换为编码器时间基单位
-                // time_base = {1, fps}，所以 pts = elapsed_us * fps / 1000000
-                // 使用 framerate 的 num 和 den 来避免整数除法精度损失
-                int64_t calculated_pts = (elapsed * context->codec_ctx->framerate.num) / 
-                                        (1000000 * context->codec_ctx->framerate.den);
-                // 确保时间戳单调递增（防止时间回退导致的问题）
-                if (calculated_pts > context->pts) {
-                    context->pts = calculated_pts;
-                } else {
-                    context->pts++;  // 如果计算出的时间戳小于等于当前值，则递增
-                }
-                context->frame_yuv->pts = context->pts;
-                
-                // 强制第一个帧为关键帧
-                if (!context->first_frame_sent) {
-                    context->frame_yuv->pict_type = AV_PICTURE_TYPE_I;
-                }
-                
-                // 编码帧
-                int ret = avcodec_send_frame(context->codec_ctx, context->frame_yuv);
-                if (ret < 0) {
-                    if (ret != AVERROR(EAGAIN)) {
-                        std::cerr << "编码帧失败: " << avErrorToString(ret) << std::endl;
-                    }
-                } else {
-                    // 接收编码后的数据包
-                    while (ret >= 0) {
-                        ret = avcodec_receive_packet(context->codec_ctx, context->pkt);
-                        if (ret == AVERROR(EAGAIN) || ret == AVERROR_EOF) {
-                            break;
-                        } else if (ret < 0) {
-                            std::cerr << "接收编码数据包失败: " << avErrorToString(ret) << std::endl;
-                            break;
-                        }
+                if (!context->rtmp_streamer.pushFrame(frame_to_push)) {
+                    // 推送失败，可能是连接断开
+                    std::cerr << "通道 " << channel_id << " RTMP推流推送帧失败，将尝试重连" << std::endl;
+                    
+                    // 清理推流资源
+                    cleanupFFmpegPushStream(context.get());
+                    
+                    // 如果通道推流仍然启用，标记需要重连
+                    if (channel->push_enabled.load()) {
+                        context->push_reconnect_needed = true;
+                        context->push_reconnect_time = std::chrono::steady_clock::now() + 
+                                                       std::chrono::seconds(3);  // 3秒后重连
+                        context->push_reconnect_attempts++;
                         
-                        // 设置流索引和时间戳
-                        context->pkt->stream_index = 0;
-                        av_packet_rescale_ts(context->pkt, context->codec_ctx->time_base, 
-                                           context->fmt_ctx->streams[0]->time_base);
-                        
-                        // 确保 DTS 有效（如果 DTS 无效，使用 PTS）
-                        if (context->pkt->dts == AV_NOPTS_VALUE) {
-                            context->pkt->dts = context->pkt->pts;
-                        }
-                        // 确保 DTS <= PTS
-                        if (context->pkt->dts > context->pkt->pts) {
-                            context->pkt->dts = context->pkt->pts;
-                        }
-                        
-                        // 写入数据包
-                        ret = av_interleaved_write_frame(context->fmt_ctx, context->pkt);
-                        if (ret < 0) {
-                            std::string error_msg = avErrorToString(ret);
-                            std::cerr << "通道 " << channel_id << " 写入数据包失败: " << error_msg 
-                                      << " (错误码: " << ret << ", PTS: " << context->pkt->pts 
-                                      << ", DTS: " << context->pkt->dts 
-                                      << ", 关键帧: " << (context->pkt->flags & AV_PKT_FLAG_KEY ? "是" : "否") << ")" << std::endl;
-                            
-                            // 检查是否是连接断开错误（Broken pipe、Connection reset等）
-                            bool is_connection_error = false;
-                            if (ret == AVERROR(EPIPE) || errno == EPIPE || 
-                                error_msg.find("Broken pipe") != std::string::npos ||
-                                error_msg.find("broken pipe") != std::string::npos ||
-                                ret == AVERROR(ECONNRESET) || errno == ECONNRESET ||
-                                error_msg.find("Connection reset") != std::string::npos ||
-                                error_msg.find("Connection refused") != std::string::npos) {
-                                is_connection_error = true;
-                            }
-                            
-                            if (is_connection_error) {
-                                std::cerr << "通道 " << channel_id << " RTMP推流连接已断开，将尝试重连" << std::endl;
-                                
-                                // 清理推流资源
-                                cleanupFFmpegPushStream(context.get());
-                                
-                                // 如果通道推流仍然启用，标记需要重连
-                                if (channel->push_enabled.load()) {
-                                    context->push_reconnect_needed = true;
-                                    context->push_reconnect_time = std::chrono::steady_clock::now() + 
-                                                                   std::chrono::seconds(3);  // 3秒后重连
-                                    context->push_reconnect_attempts++;
-                                    
-                                    // 限制重连次数，避免无限重连
-                                    const int MAX_RECONNECT_ATTEMPTS = 10;
-                                    if (context->push_reconnect_attempts > MAX_RECONNECT_ATTEMPTS) {
-                                        std::cerr << "通道 " << channel_id << " RTMP推流重连次数超过限制（" 
-                                                  << MAX_RECONNECT_ATTEMPTS << "次），停止重连" << std::endl;
-                                        context->push_stream_enabled = false;
-                                        context->push_reconnect_needed = false;
-                                    } else {
-                                        std::cout << "通道 " << channel_id << " 将在3秒后尝试第 " 
-                                                  << context->push_reconnect_attempts << " 次重连" << std::endl;
-                                    }
-                                } else {
-                                    // 通道推流已禁用，不再重连
-                                    context->push_stream_enabled = false;
-                                    context->push_reconnect_needed = false;
-                                }
-                                
-                                // 跳出内层循环，不再尝试写入数据包
-                                break;
-                            }
+                        // 限制重连次数，避免无限重连
+                        const int MAX_RECONNECT_ATTEMPTS = 10;
+                        if (context->push_reconnect_attempts > MAX_RECONNECT_ATTEMPTS) {
+                            std::cerr << "通道 " << channel_id << " RTMP推流重连次数超过限制（" 
+                                      << MAX_RECONNECT_ATTEMPTS << "次），停止重连" << std::endl;
+                            context->push_stream_enabled = false;
+                            context->push_reconnect_needed = false;
                         } else {
-                            // 写入成功，标记第一帧已发送
-                            if (!context->first_frame_sent) {
-                                context->first_frame_sent = true;
-                                std::cout << "通道 " << channel_id << " 第一个数据包写入成功 (PTS: " 
-                                          << context->pkt->pts << ", 关键帧: " 
-                                          << (context->pkt->flags & AV_PKT_FLAG_KEY ? "是" : "否") << ")" << std::endl;
-                            }
+                            std::cout << "通道 " << channel_id << " 将在3秒后尝试第 " 
+                                      << context->push_reconnect_attempts << " 次重连" << std::endl;
                         }
-                        
-                        av_packet_unref(context->pkt);
+                    } else {
+                        // 通道推流已禁用，不再重连
+                        context->push_stream_enabled = false;
+                        context->push_reconnect_needed = false;
                     }
                 }
             }

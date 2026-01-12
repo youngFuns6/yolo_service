@@ -20,6 +20,7 @@ extern "C" {
 #include "channel.h"
 #include "yolov11_detector.h"
 #include "algorithm_config.h"
+#include "rtmp_streamer.h"
 
 namespace detector_service {
 
@@ -50,16 +51,8 @@ private:
         std::atomic<bool> running;
         cv::VideoCapture cap;
         
-        // FFmpeg推流相关
-        AVFormatContext* fmt_ctx;          // 输出格式上下文
-        AVCodecContext* codec_ctx;          // 编码器上下文
-        AVFrame* frame;                    // 编码帧
-        AVFrame* frame_yuv;                // YUV格式帧
-        AVPacket* pkt;                     // 编码数据包
-        SwsContext* sws_ctx;               // 颜色空间转换上下文
-        int64_t pts;                       // 时间戳
-        std::chrono::steady_clock::time_point push_start_time;  // 推流开始时间
-        bool first_frame_sent;             // 是否已发送第一帧
+        // RTMP推流相关
+        RTMPStreamer rtmp_streamer;        // RTMP推流器实例
         
         bool push_stream_enabled;          // 是否启用推流
         int push_width;                    // 推流宽度
@@ -76,12 +69,7 @@ private:
         int push_fps;                      // 推流帧率（用于重连）
         std::optional<int> push_bitrate;   // 推流比特率（用于重连）
         
-        StreamContext() : fmt_ctx(nullptr), codec_ctx(nullptr), 
-                         frame(nullptr), frame_yuv(nullptr), pkt(nullptr),
-                         sws_ctx(nullptr), pts(0),
-                         push_start_time(std::chrono::steady_clock::now()),
-                         first_frame_sent(false),
-                         push_stream_enabled(false), push_width(0), push_height(0),
+        StreamContext() : push_stream_enabled(false), push_width(0), push_height(0),
                          push_reconnect_needed(false),
                          push_reconnect_time(std::chrono::steady_clock::now()),
                          push_reconnect_attempts(0), push_fps(0) {}

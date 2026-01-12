@@ -31,6 +31,12 @@ public:
     
     // 清理资源
     void cleanup();
+    
+    // 停止 MQTT 连接和重连（当上报被禁用时调用）
+    void stopMqttConnection();
+    
+    // 触发 MQTT 连接（当上报被启用时调用）
+    void triggerReconnect(const ReportConfig& config);
 
 private:
     ReportService();
@@ -89,9 +95,6 @@ private:
     
     // 重连线程函数
     void reconnectWorker();
-    
-    // 触发重连
-    void triggerReconnect(const ReportConfig& config);
     
     // 执行重连（在新线程中调用，使用指数退避策略）
     void performReconnect();

@@ -17,6 +17,7 @@ target_link_libraries(utils PUBLIC
     CURL::libcurl
     nlohmann_json::nlohmann_json
     unofficial::mosquitto::mosquitto
+    models
 )
 
 target_compile_options(utils PRIVATE
