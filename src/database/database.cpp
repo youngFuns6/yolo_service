@@ -62,15 +62,10 @@ bool Database::createTables() {
             source_url TEXT NOT NULL,
             status TEXT NOT NULL DEFAULT 'idle',
             enabled INTEGER NOT NULL DEFAULT 0,
-            push_enabled INTEGER NOT NULL DEFAULT 0,
             report_enabled INTEGER NOT NULL DEFAULT 0,
             created_at TEXT NOT NULL,
             updated_at TEXT NOT NULL
         );
-        
-        -- 为现有数据库添加push_enabled字段（如果不存在）
-        -- SQLite不支持IF NOT EXISTS for ALTER TABLE ADD COLUMN，需要先检查
-        -- 这里使用PRAGMA table_info来检查列是否存在，如果不存在则添加
         
         CREATE TABLE IF NOT EXISTS report_config (
             id INTEGER PRIMARY KEY CHECK (id = 1),
@@ -89,13 +84,26 @@ bool Database::createTables() {
         CREATE INDEX IF NOT EXISTS idx_channel_id ON alerts(channel_id);
         CREATE INDEX IF NOT EXISTS idx_created_at ON alerts(created_at);
 
-        CREATE TABLE IF NOT EXISTS push_stream_config (
+        CREATE TABLE IF NOT EXISTS gb28181_config (
             id INTEGER PRIMARY KEY CHECK (id = 1),
-            rtmp_url TEXT NOT NULL DEFAULT '',
-            width INTEGER,
-            height INTEGER,
-            fps INTEGER,
-            bitrate INTEGER,
+            enabled INTEGER NOT NULL DEFAULT 0,
+            sip_server_ip TEXT NOT NULL DEFAULT '',
+            sip_server_port INTEGER NOT NULL DEFAULT 5060,
+            sip_server_id TEXT NOT NULL DEFAULT '',
+            sip_server_domain TEXT NOT NULL DEFAULT '',
+            device_id TEXT NOT NULL DEFAULT '',
+            device_password TEXT NOT NULL DEFAULT '',
+            device_name TEXT NOT NULL DEFAULT '',
+            manufacturer TEXT NOT NULL DEFAULT '',
+            model TEXT NOT NULL DEFAULT '',
+            local_sip_port INTEGER NOT NULL DEFAULT 5061,
+            rtp_port_start INTEGER NOT NULL DEFAULT 30000,
+            rtp_port_end INTEGER NOT NULL DEFAULT 30100,
+            heartbeat_interval INTEGER NOT NULL DEFAULT 60,
+            heartbeat_count INTEGER NOT NULL DEFAULT 3,
+            register_expires INTEGER NOT NULL DEFAULT 3600,
+            stream_mode TEXT NOT NULL DEFAULT 'PS',
+            max_channels INTEGER NOT NULL DEFAULT 32,
             updated_at TEXT NOT NULL
         );
 
@@ -125,21 +133,6 @@ bool Database::createTables() {
         return false;
     }
 
-    // 为现有数据库添加push_enabled字段（如果不存在）
-    // SQLite 3.32.0+ 支持 ALTER TABLE ADD COLUMN IF NOT EXISTS，但为了兼容性，先检查
-    const char* alter_sql = "ALTER TABLE channels ADD COLUMN push_enabled INTEGER NOT NULL DEFAULT 0";
-    err_msg = nullptr;
-    rc = sqlite3_exec(db_, alter_sql, nullptr, nullptr, &err_msg);
-    // 如果列已存在，会返回错误，这是正常的，可以忽略
-    if (rc != SQLITE_OK && err_msg) {
-        // 检查是否是"duplicate column name"错误，如果是则忽略
-        std::string error_str = err_msg;
-        if (error_str.find("duplicate column name") == std::string::npos) {
-            std::cerr << "添加push_enabled字段失败: " << err_msg << std::endl;
-        }
-        sqlite3_free(err_msg);
-    }
-    
     // 为现有数据库添加report_enabled字段（如果不存在）
     const char* alter_report_sql = "ALTER TABLE channels ADD COLUMN report_enabled INTEGER NOT NULL DEFAULT 0";
     err_msg = nullptr;
@@ -513,10 +506,10 @@ bool Database::cleanupOldAlerts(int days) {
 
 // 通道管理方法实现
 int Database::insertChannel(int id, const std::string& name, const std::string& source_url,
-                             bool enabled, bool push_enabled, bool report_enabled, const std::string& created_at, const std::string& updated_at) {
+                             bool enabled, bool report_enabled, const std::string& created_at, const std::string& updated_at) {
     const char* sql = R"(
-        INSERT INTO channels (id, name, source_url, status, enabled, push_enabled, report_enabled, created_at, updated_at)
-        VALUES (?, ?, ?, 'idle', ?, ?, ?, ?, ?)
+        INSERT INTO channels (id, name, source_url, status, enabled, report_enabled, created_at, updated_at)
+        VALUES (?, ?, ?, 'idle', ?, ?, ?, ?)
     )";
 
     sqlite3_stmt* stmt;
@@ -530,10 +523,9 @@ int Database::insertChannel(int id, const std::string& name, const std::string& 
     sqlite3_bind_text(stmt, 2, name.c_str(), -1, SQLITE_STATIC);
     sqlite3_bind_text(stmt, 3, source_url.c_str(), -1, SQLITE_STATIC);
     sqlite3_bind_int(stmt, 4, enabled ? 1 : 0);
-    sqlite3_bind_int(stmt, 5, push_enabled ? 1 : 0);
-    sqlite3_bind_int(stmt, 6, report_enabled ? 1 : 0);
-    sqlite3_bind_text(stmt, 7, created_at.c_str(), -1, SQLITE_STATIC);
-    sqlite3_bind_text(stmt, 8, updated_at.c_str(), -1, SQLITE_STATIC);
+    sqlite3_bind_int(stmt, 5, report_enabled ? 1 : 0);
+    sqlite3_bind_text(stmt, 6, created_at.c_str(), -1, SQLITE_STATIC);
+    sqlite3_bind_text(stmt, 7, updated_at.c_str(), -1, SQLITE_STATIC);
 
     rc = sqlite3_step(stmt);
     int result = -1;
@@ -565,10 +557,10 @@ bool Database::deleteChannel(int channel_id) {
 }
 
 bool Database::updateChannel(int channel_id, const std::string& name, const std::string& source_url,
-                             bool enabled, bool push_enabled, bool report_enabled, const std::string& updated_at) {
+                             bool enabled, bool report_enabled, const std::string& updated_at) {
     const char* sql = R"(
         UPDATE channels 
-        SET name = ?, source_url = ?, enabled = ?, push_enabled = ?, report_enabled = ?, updated_at = ?
+        SET name = ?, source_url = ?, enabled = ?, report_enabled = ?, updated_at = ?
         WHERE id = ?
     )";
     
@@ -581,10 +573,9 @@ bool Database::updateChannel(int channel_id, const std::string& name, const std:
     sqlite3_bind_text(stmt, 1, name.c_str(), -1, SQLITE_STATIC);
     sqlite3_bind_text(stmt, 2, source_url.c_str(), -1, SQLITE_STATIC);
     sqlite3_bind_int(stmt, 3, enabled ? 1 : 0);
-    sqlite3_bind_int(stmt, 4, push_enabled ? 1 : 0);
-    sqlite3_bind_int(stmt, 5, report_enabled ? 1 : 0);
-    sqlite3_bind_text(stmt, 6, updated_at.c_str(), -1, SQLITE_STATIC);
-    sqlite3_bind_int(stmt, 7, channel_id);
+    sqlite3_bind_int(stmt, 4, report_enabled ? 1 : 0);
+    sqlite3_bind_text(stmt, 5, updated_at.c_str(), -1, SQLITE_STATIC);
+    sqlite3_bind_int(stmt, 6, channel_id);
     
     rc = sqlite3_step(stmt);
     sqlite3_finalize(stmt);
@@ -611,32 +602,13 @@ bool Database::updateChannelStatus(int channel_id, const std::string& status, co
     return rc == SQLITE_DONE;
 }
 
-bool Database::updateChannelPushEnabled(int channel_id, bool push_enabled, const std::string& updated_at) {
-    const char* sql = "UPDATE channels SET push_enabled = ?, updated_at = ? WHERE id = ?";
-    
-    sqlite3_stmt* stmt;
-    int rc = sqlite3_prepare_v2(db_, sql, -1, &stmt, nullptr);
-    if (rc != SQLITE_OK) {
-        return false;
-    }
-
-    sqlite3_bind_int(stmt, 1, push_enabled ? 1 : 0);
-    sqlite3_bind_text(stmt, 2, updated_at.c_str(), -1, SQLITE_STATIC);
-    sqlite3_bind_int(stmt, 3, channel_id);
-    
-    rc = sqlite3_step(stmt);
-    sqlite3_finalize(stmt);
-
-    return rc == SQLITE_DONE;
-}
-
 bool Database::updateChannelId(int old_id, int new_id) {
     // SQLite不支持直接更新PRIMARY KEY，需要使用事务删除并重新插入
     // 首先获取旧记录的所有数据
     std::string name, source_url, status, created_at, updated_at;
-    bool enabled, push_enabled, report_enabled;
+    bool enabled, report_enabled;
     
-    if (!loadChannelFromDB(old_id, name, source_url, status, enabled, push_enabled, report_enabled, created_at, updated_at)) {
+    if (!loadChannelFromDB(old_id, name, source_url, status, enabled, report_enabled, created_at, updated_at)) {
         return false;
     }
     
@@ -671,8 +643,8 @@ bool Database::updateChannelId(int old_id, int new_id) {
     
     // 插入新记录
     const char* insert_sql = R"(
-        INSERT INTO channels (id, name, source_url, status, enabled, push_enabled, report_enabled, created_at, updated_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        INSERT INTO channels (id, name, source_url, status, enabled, report_enabled, created_at, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
     )";
     sqlite3_stmt* insert_stmt;
     rc = sqlite3_prepare_v2(db_, insert_sql, -1, &insert_stmt, nullptr);
@@ -686,10 +658,9 @@ bool Database::updateChannelId(int old_id, int new_id) {
     sqlite3_bind_text(insert_stmt, 3, source_url.c_str(), -1, SQLITE_STATIC);
     sqlite3_bind_text(insert_stmt, 4, status.c_str(), -1, SQLITE_STATIC);
     sqlite3_bind_int(insert_stmt, 5, enabled ? 1 : 0);
-    sqlite3_bind_int(insert_stmt, 6, push_enabled ? 1 : 0);
-    sqlite3_bind_int(insert_stmt, 7, report_enabled ? 1 : 0);
-    sqlite3_bind_text(insert_stmt, 8, created_at.c_str(), -1, SQLITE_STATIC);
-    sqlite3_bind_text(insert_stmt, 9, updated_at.c_str(), -1, SQLITE_STATIC);
+    sqlite3_bind_int(insert_stmt, 6, report_enabled ? 1 : 0);
+    sqlite3_bind_text(insert_stmt, 7, created_at.c_str(), -1, SQLITE_STATIC);
+    sqlite3_bind_text(insert_stmt, 8, updated_at.c_str(), -1, SQLITE_STATIC);
     
     rc = sqlite3_step(insert_stmt);
     sqlite3_finalize(insert_stmt);
@@ -752,8 +723,8 @@ std::vector<std::pair<int, std::string>> Database::getAllChannelsFromDB() {
 }
 
 bool Database::loadChannelFromDB(int channel_id, std::string& name, std::string& source_url,
-                                  std::string& status, bool& enabled, bool& push_enabled, bool& report_enabled, std::string& created_at, std::string& updated_at) {
-    const char* sql = "SELECT name, source_url, status, enabled, push_enabled, report_enabled, created_at, updated_at FROM channels WHERE id = ?";
+                                  std::string& status, bool& enabled, bool& report_enabled, std::string& created_at, std::string& updated_at) {
+    const char* sql = "SELECT name, source_url, status, enabled, report_enabled, created_at, updated_at FROM channels WHERE id = ?";
     
     sqlite3_stmt* stmt;
     int rc = sqlite3_prepare_v2(db_, sql, -1, &stmt, nullptr);
@@ -769,13 +740,11 @@ bool Database::loadChannelFromDB(int channel_id, std::string& name, std::string&
         source_url = reinterpret_cast<const char*>(sqlite3_column_text(stmt, 1));
         status = reinterpret_cast<const char*>(sqlite3_column_text(stmt, 2));
         enabled = sqlite3_column_int(stmt, 3) != 0;
-        // 如果push_enabled列不存在（旧数据库），默认为false
-        push_enabled = (col_count > 4) ? (sqlite3_column_int(stmt, 4) != 0) : false;
         // 如果report_enabled列不存在（旧数据库），默认为false
-        report_enabled = (col_count > 5) ? (sqlite3_column_int(stmt, 5) != 0) : false;
+        report_enabled = (col_count > 4) ? (sqlite3_column_int(stmt, 4) != 0) : false;
         // 根据列数确定created_at和updated_at的位置
-        int created_at_idx = (col_count > 5) ? 6 : ((col_count > 4) ? 5 : 4);
-        int updated_at_idx = (col_count > 5) ? 7 : ((col_count > 4) ? 6 : 5);
+        int created_at_idx = (col_count > 4) ? 5 : 4;
+        int updated_at_idx = (col_count > 4) ? 6 : 5;
         created_at = reinterpret_cast<const char*>(sqlite3_column_text(stmt, created_at_idx));
         updated_at = reinterpret_cast<const char*>(sqlite3_column_text(stmt, updated_at_idx));
         sqlite3_finalize(stmt);
@@ -802,118 +771,6 @@ int Database::getMaxChannelId() {
 
     sqlite3_finalize(stmt);
     return max_id;
-}
-
-bool Database::savePushStreamConfig(const std::string& rtmp_url, 
-                                     std::optional<int> width, 
-                                     std::optional<int> height, 
-                                     std::optional<int> fps, 
-                                     std::optional<int> bitrate) {
-    // 先加载现有配置，只更新提供的字段
-    std::string existing_rtmp_url;
-    std::optional<int> existing_width, existing_height, existing_fps, existing_bitrate;
-    
-    bool exists = loadPushStreamConfig(existing_rtmp_url, existing_width, existing_height, existing_fps, existing_bitrate);
-    
-    // 使用提供的值，如果没有提供则使用现有值
-    std::optional<int> final_width = width.has_value() ? width : existing_width;
-    std::optional<int> final_height = height.has_value() ? height : existing_height;
-    std::optional<int> final_fps = fps.has_value() ? fps : existing_fps;
-    std::optional<int> final_bitrate = bitrate.has_value() ? bitrate : existing_bitrate;
-    
-    // 使用 INSERT OR REPLACE 来确保只有一条记录
-    const char* sql = R"(
-        INSERT OR REPLACE INTO push_stream_config (id, rtmp_url, width, height, fps, bitrate, updated_at)
-        VALUES (1, ?, ?, ?, ?, ?, ?)
-    )";
-    
-    sqlite3_stmt* stmt;
-    int rc = sqlite3_prepare_v2(db_, sql, -1, &stmt, nullptr);
-    if (rc != SQLITE_OK) {
-        std::cerr << "准备语句失败: " << sqlite3_errmsg(db_) << std::endl;
-        return false;
-    }
-    
-    std::string updated_at = getCurrentTime();
-    sqlite3_bind_text(stmt, 1, rtmp_url.c_str(), -1, SQLITE_STATIC);
-    
-    // 如果提供了值则绑定，否则绑定 NULL
-    if (final_width.has_value()) {
-        sqlite3_bind_int(stmt, 2, final_width.value());
-    } else {
-        sqlite3_bind_null(stmt, 2);
-    }
-    if (final_height.has_value()) {
-        sqlite3_bind_int(stmt, 3, final_height.value());
-    } else {
-        sqlite3_bind_null(stmt, 3);
-    }
-    if (final_fps.has_value()) {
-        sqlite3_bind_int(stmt, 4, final_fps.value());
-    } else {
-        sqlite3_bind_null(stmt, 4);
-    }
-    if (final_bitrate.has_value()) {
-        sqlite3_bind_int(stmt, 5, final_bitrate.value());
-    } else {
-        sqlite3_bind_null(stmt, 5);
-    }
-    
-    sqlite3_bind_text(stmt, 6, updated_at.c_str(), -1, SQLITE_STATIC);
-    
-    rc = sqlite3_step(stmt);
-    sqlite3_finalize(stmt);
-    
-    return rc == SQLITE_DONE;
-}
-
-bool Database::loadPushStreamConfig(std::string& rtmp_url, 
-                                     std::optional<int>& width, 
-                                     std::optional<int>& height, 
-                                     std::optional<int>& fps, 
-                                     std::optional<int>& bitrate) {
-    const char* sql = "SELECT rtmp_url, width, height, fps, bitrate FROM push_stream_config WHERE id = 1";
-    
-    sqlite3_stmt* stmt;
-    int rc = sqlite3_prepare_v2(db_, sql, -1, &stmt, nullptr);
-    if (rc != SQLITE_OK) {
-        return false;
-    }
-    
-    if (sqlite3_step(stmt) == SQLITE_ROW) {
-        rtmp_url = reinterpret_cast<const char*>(sqlite3_column_text(stmt, 0));
-        
-        // 检查每个字段是否为 NULL
-        if (sqlite3_column_type(stmt, 1) != SQLITE_NULL) {
-            width = sqlite3_column_int(stmt, 1);
-        } else {
-            width = std::nullopt;
-        }
-        
-        if (sqlite3_column_type(stmt, 2) != SQLITE_NULL) {
-            height = sqlite3_column_int(stmt, 2);
-        } else {
-            height = std::nullopt;
-        }
-        
-        if (sqlite3_column_type(stmt, 3) != SQLITE_NULL) {
-            fps = sqlite3_column_int(stmt, 3);
-        } else {
-            fps = std::nullopt;
-        }
-        
-        if (sqlite3_column_type(stmt, 4) != SQLITE_NULL) {
-            bitrate = sqlite3_column_int(stmt, 4);
-        } else {
-            bitrate = std::nullopt;
-        }
-        
-        sqlite3_finalize(stmt);
-        return true;
-    }
-    
-    sqlite3_finalize(stmt);
-    return false;
 }
 
 bool Database::saveReportConfig(const ReportConfig& config) {
@@ -987,6 +844,115 @@ bool Database::loadReportConfig(ReportConfig& config) {
         config.mqtt_client_id = mqtt_client_id ? mqtt_client_id : "detector_service";
         
         config.enabled = sqlite3_column_int(stmt, 8) != 0;
+        
+        sqlite3_finalize(stmt);
+        return true;
+    }
+    
+    sqlite3_finalize(stmt);
+    return false;
+}
+
+bool Database::saveGB28181Config(const GB28181Config& config) {
+    const char* sql = R"(
+        INSERT OR REPLACE INTO gb28181_config (
+            id, enabled, sip_server_ip, sip_server_port, sip_server_id, sip_server_domain,
+            device_id, device_password, device_name, manufacturer, model,
+            local_sip_port, rtp_port_start, rtp_port_end, heartbeat_interval, heartbeat_count,
+            register_expires, stream_mode, max_channels, updated_at
+        ) VALUES (1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    )";
+    
+    sqlite3_stmt* stmt;
+    int rc = sqlite3_prepare_v2(db_, sql, -1, &stmt, nullptr);
+    if (rc != SQLITE_OK) {
+        std::cerr << "准备语句失败: " << sqlite3_errmsg(db_) << std::endl;
+        return false;
+    }
+    
+    std::string updated_at = getCurrentTime();
+    
+    sqlite3_bind_int(stmt, 1, config.enabled.load() ? 1 : 0);
+    sqlite3_bind_text(stmt, 2, config.sip_server_ip.c_str(), -1, SQLITE_STATIC);
+    sqlite3_bind_int(stmt, 3, config.sip_server_port);
+    sqlite3_bind_text(stmt, 4, config.sip_server_id.c_str(), -1, SQLITE_STATIC);
+    sqlite3_bind_text(stmt, 5, config.sip_server_domain.c_str(), -1, SQLITE_STATIC);
+    sqlite3_bind_text(stmt, 6, config.device_id.c_str(), -1, SQLITE_STATIC);
+    sqlite3_bind_text(stmt, 7, config.device_password.c_str(), -1, SQLITE_STATIC);
+    sqlite3_bind_text(stmt, 8, config.device_name.c_str(), -1, SQLITE_STATIC);
+    sqlite3_bind_text(stmt, 9, config.manufacturer.c_str(), -1, SQLITE_STATIC);
+    sqlite3_bind_text(stmt, 10, config.model.c_str(), -1, SQLITE_STATIC);
+    sqlite3_bind_int(stmt, 11, config.local_sip_port);
+    sqlite3_bind_int(stmt, 12, config.rtp_port_start);
+    sqlite3_bind_int(stmt, 13, config.rtp_port_end);
+    sqlite3_bind_int(stmt, 14, config.heartbeat_interval);
+    sqlite3_bind_int(stmt, 15, config.heartbeat_count);
+    sqlite3_bind_int(stmt, 16, config.register_expires);
+    sqlite3_bind_text(stmt, 17, config.stream_mode.c_str(), -1, SQLITE_STATIC);
+    sqlite3_bind_int(stmt, 18, config.max_channels);
+    sqlite3_bind_text(stmt, 19, updated_at.c_str(), -1, SQLITE_STATIC);
+    
+    rc = sqlite3_step(stmt);
+    sqlite3_finalize(stmt);
+    
+    return rc == SQLITE_DONE;
+}
+
+bool Database::loadGB28181Config(GB28181Config& config) {
+    const char* sql = R"(
+        SELECT enabled, sip_server_ip, sip_server_port, sip_server_id, sip_server_domain,
+               device_id, device_password, device_name, manufacturer, model,
+               local_sip_port, rtp_port_start, rtp_port_end, heartbeat_interval, heartbeat_count,
+               register_expires, stream_mode, max_channels
+        FROM gb28181_config WHERE id = 1
+    )";
+    
+    sqlite3_stmt* stmt;
+    int rc = sqlite3_prepare_v2(db_, sql, -1, &stmt, nullptr);
+    if (rc != SQLITE_OK) {
+        return false;
+    }
+    
+    if (sqlite3_step(stmt) == SQLITE_ROW) {
+        config.enabled = sqlite3_column_int(stmt, 0) != 0;
+        
+        const char* sip_server_ip = reinterpret_cast<const char*>(sqlite3_column_text(stmt, 1));
+        config.sip_server_ip = sip_server_ip ? sip_server_ip : "";
+        
+        config.sip_server_port = sqlite3_column_int(stmt, 2);
+        
+        const char* sip_server_id = reinterpret_cast<const char*>(sqlite3_column_text(stmt, 3));
+        config.sip_server_id = sip_server_id ? sip_server_id : "";
+        
+        const char* sip_server_domain = reinterpret_cast<const char*>(sqlite3_column_text(stmt, 4));
+        config.sip_server_domain = sip_server_domain ? sip_server_domain : "";
+        
+        const char* device_id = reinterpret_cast<const char*>(sqlite3_column_text(stmt, 5));
+        config.device_id = device_id ? device_id : "";
+        
+        const char* device_password = reinterpret_cast<const char*>(sqlite3_column_text(stmt, 6));
+        config.device_password = device_password ? device_password : "";
+        
+        const char* device_name = reinterpret_cast<const char*>(sqlite3_column_text(stmt, 7));
+        config.device_name = device_name ? device_name : "";
+        
+        const char* manufacturer = reinterpret_cast<const char*>(sqlite3_column_text(stmt, 8));
+        config.manufacturer = manufacturer ? manufacturer : "";
+        
+        const char* model = reinterpret_cast<const char*>(sqlite3_column_text(stmt, 9));
+        config.model = model ? model : "";
+        
+        config.local_sip_port = sqlite3_column_int(stmt, 10);
+        config.rtp_port_start = sqlite3_column_int(stmt, 11);
+        config.rtp_port_end = sqlite3_column_int(stmt, 12);
+        config.heartbeat_interval = sqlite3_column_int(stmt, 13);
+        config.heartbeat_count = sqlite3_column_int(stmt, 14);
+        config.register_expires = sqlite3_column_int(stmt, 15);
+        
+        const char* stream_mode = reinterpret_cast<const char*>(sqlite3_column_text(stmt, 16));
+        config.stream_mode = stream_mode ? stream_mode : "PS";
+        
+        config.max_channels = sqlite3_column_int(stmt, 17);
         
         sqlite3_finalize(stmt);
         return true;

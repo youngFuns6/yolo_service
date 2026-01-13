@@ -8,7 +8,6 @@ export interface Channel {
   source_url: string;
   status: ChannelStatus;
   enabled: boolean;
-  push_enabled: boolean;
   report_enabled: boolean;
   width: number;
   height: number;
@@ -22,7 +21,6 @@ export interface CreateChannelParams {
   name: string;
   source_url: string;
   enabled?: boolean;
-  push_enabled?: boolean;
   report_enabled?: boolean;
 }
 
@@ -31,7 +29,6 @@ export interface UpdateChannelParams {
   name?: string;
   source_url?: string;
   enabled?: boolean;
-  push_enabled?: boolean;
   report_enabled?: boolean;
 }
 
@@ -113,17 +110,6 @@ export function stopChannel(channelId: number) {
   return request<ApiResponse>({
     url: `/channels/${channelId}/stop`,
     method: "POST",
-  });
-}
-
-/**
- * 设置推流开关
- */
-export function setChannelPush(channelId: number, pushEnabled: boolean) {
-  return request<ApiResponse>({
-    url: `/channels/${channelId}/push`,
-    method: "POST",
-    data: { push_enabled: pushEnabled },
   });
 }
 

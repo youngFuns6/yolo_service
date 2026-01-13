@@ -43,8 +43,8 @@ int ChannelManager::createChannel(const Channel& channel) {
         id = channel.id;
         // 检查数据库中id是否已存在
         std::string name, source_url, status, created_at, updated_at;
-        bool enabled, push_enabled, report_enabled;
-        if (db.loadChannelFromDB(id, name, source_url, status, enabled, push_enabled, report_enabled, created_at, updated_at)) {
+        bool enabled, report_enabled;
+        if (db.loadChannelFromDB(id, name, source_url, status, enabled, report_enabled, created_at, updated_at)) {
             return -1; // 返回-1表示id已存在
         }
     } else {
@@ -58,7 +58,7 @@ int ChannelManager::createChannel(const Channel& channel) {
     
     // 保存到数据库
     int db_result = db.insertChannel(id, channel.name, channel.source_url,
-                                      channel.enabled.load(), channel.push_enabled.load(),
+                                      channel.enabled.load(),
                                       channel.report_enabled.load(), created_at, updated_at);
     if (db_result == -1) {
         std::cerr << "错误: 通道数据库保存失败" << std::endl;
@@ -73,8 +73,8 @@ bool ChannelManager::deleteChannel(int channel_id) {
     
     // 检查通道是否存在
     std::string name, source_url, status, created_at, updated_at;
-    bool enabled, push_enabled, report_enabled;
-    if (!db.loadChannelFromDB(channel_id, name, source_url, status, enabled, push_enabled, report_enabled, created_at, updated_at)) {
+    bool enabled, report_enabled;
+    if (!db.loadChannelFromDB(channel_id, name, source_url, status, enabled, report_enabled, created_at, updated_at)) {
         return false; // 通道不存在
     }
     
@@ -102,8 +102,8 @@ bool ChannelManager::updateChannel(int channel_id, const Channel& channel) {
     
     // 检查通道是否存在
     std::string name, source_url, status, created_at, updated_at;
-    bool enabled, push_enabled, report_enabled;
-    if (!db.loadChannelFromDB(channel_id, name, source_url, status, enabled, push_enabled, report_enabled, created_at, updated_at)) {
+    bool enabled, report_enabled;
+    if (!db.loadChannelFromDB(channel_id, name, source_url, status, enabled, report_enabled, created_at, updated_at)) {
         return false; // 通道不存在
     }
     
@@ -113,8 +113,8 @@ bool ChannelManager::updateChannel(int channel_id, const Channel& channel) {
     if (channel.id != channel_id && channel.id > 0) {
         // 检查新id是否已存在
         std::string tmp_name, tmp_source_url, tmp_status, tmp_created_at, tmp_updated_at;
-        bool tmp_enabled, tmp_push_enabled, tmp_report_enabled;
-        if (db.loadChannelFromDB(channel.id, tmp_name, tmp_source_url, tmp_status, tmp_enabled, tmp_push_enabled, tmp_report_enabled, tmp_created_at, tmp_updated_at)) {
+        bool tmp_enabled, tmp_report_enabled;
+        if (db.loadChannelFromDB(channel.id, tmp_name, tmp_source_url, tmp_status, tmp_enabled, tmp_report_enabled, tmp_created_at, tmp_updated_at)) {
             return false; // 新id已存在，更新失败
         }
         
@@ -132,7 +132,7 @@ bool ChannelManager::updateChannel(int channel_id, const Channel& channel) {
     
     // 更新数据库
     bool db_result = db.updateChannel(final_id, channel.name, channel.source_url,
-                                      channel.enabled.load(), channel.push_enabled.load(),
+                                      channel.enabled.load(),
                                       channel.report_enabled.load(), updated_at);
     if (!db_result) {
         std::cerr << "错误: 通道数据库更新失败" << std::endl;
@@ -150,9 +150,9 @@ std::shared_ptr<Channel> ChannelManager::getChannel(int channel_id) {
     auto& db = Database::getInstance();
     
     std::string name, source_url, status_str, created_at, updated_at;
-    bool enabled, push_enabled, report_enabled;
+    bool enabled, report_enabled;
     
-    if (!db.loadChannelFromDB(channel_id, name, source_url, status_str, enabled, push_enabled, report_enabled, created_at, updated_at)) {
+    if (!db.loadChannelFromDB(channel_id, name, source_url, status_str, enabled, report_enabled, created_at, updated_at)) {
         return nullptr; // 通道不存在
     }
     
@@ -162,7 +162,6 @@ std::shared_ptr<Channel> ChannelManager::getChannel(int channel_id) {
     channel->source_url = source_url;
     channel->status = stringToChannelStatus(status_str);
     channel->enabled = enabled;
-    channel->push_enabled = push_enabled;
     channel->report_enabled = report_enabled;
     channel->created_at = created_at;
     channel->updated_at = updated_at;
@@ -181,16 +180,15 @@ std::vector<std::shared_ptr<Channel>> ChannelManager::getAllChannels() {
         int channel_id = pair.first;
         
         std::string name, source_url, status_str, created_at, updated_at;
-        bool enabled, push_enabled, report_enabled;
+        bool enabled, report_enabled;
         
-        if (db.loadChannelFromDB(channel_id, name, source_url, status_str, enabled, push_enabled, report_enabled, created_at, updated_at)) {
+        if (db.loadChannelFromDB(channel_id, name, source_url, status_str, enabled, report_enabled, created_at, updated_at)) {
             auto channel = std::make_shared<Channel>();
             channel->id = channel_id;
             channel->name = name;
             channel->source_url = source_url;
             channel->status = stringToChannelStatus(status_str);
             channel->enabled = enabled;
-            channel->push_enabled = push_enabled;
             channel->report_enabled = report_enabled;
             channel->created_at = created_at;
             channel->updated_at = updated_at;
@@ -207,8 +205,8 @@ bool ChannelManager::startChannel(int channel_id) {
     
     // 检查通道是否存在并获取当前状态
     std::string name, source_url, status, created_at, updated_at;
-    bool enabled, push_enabled, report_enabled;
-    if (!db.loadChannelFromDB(channel_id, name, source_url, status, enabled, push_enabled, report_enabled, created_at, updated_at)) {
+    bool enabled, report_enabled;
+    if (!db.loadChannelFromDB(channel_id, name, source_url, status, enabled, report_enabled, created_at, updated_at)) {
         return false; // 通道不存在
     }
     
@@ -234,8 +232,8 @@ bool ChannelManager::stopChannel(int channel_id) {
     
     // 检查通道是否存在并获取当前状态
     std::string name, source_url, status, created_at, updated_at;
-    bool enabled, push_enabled, report_enabled;
-    if (!db.loadChannelFromDB(channel_id, name, source_url, status, enabled, push_enabled, report_enabled, created_at, updated_at)) {
+    bool enabled, report_enabled;
+    if (!db.loadChannelFromDB(channel_id, name, source_url, status, enabled, report_enabled, created_at, updated_at)) {
         return false; // 通道不存在
     }
     
@@ -260,9 +258,9 @@ bool ChannelManager::isChannelRunning(int channel_id) {
     auto& db = Database::getInstance();
     
     std::string name, source_url, status, created_at, updated_at;
-    bool enabled, push_enabled, report_enabled;
+    bool enabled, report_enabled;
     
-    if (!db.loadChannelFromDB(channel_id, name, source_url, status, enabled, push_enabled, report_enabled, created_at, updated_at)) {
+    if (!db.loadChannelFromDB(channel_id, name, source_url, status, enabled, report_enabled, created_at, updated_at)) {
         return false; // 通道不存在
     }
     

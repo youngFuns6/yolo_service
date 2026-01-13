@@ -4,7 +4,7 @@
 
 namespace detector_service {
 
-void setupPushStreamRoutes(crow::SimpleApp& app);
+void setupGB28181ConfigRoutes(crow::SimpleApp& app);
 
 } // namespace detector_service
 

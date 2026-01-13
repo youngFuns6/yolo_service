@@ -20,7 +20,6 @@ struct Channel {
     std::string source_url;
     ChannelStatus status;
     std::atomic<bool> enabled;
-    std::atomic<bool> push_enabled;  // 推流开关
     std::atomic<bool> report_enabled;  // 上报开关
     int width;
     int height;
@@ -28,7 +27,7 @@ struct Channel {
     std::string created_at;
     std::string updated_at;
 
-    Channel() : id(0), status(ChannelStatus::IDLE), enabled(false), push_enabled(false),
+    Channel() : id(0), status(ChannelStatus::IDLE), enabled(false),
                 report_enabled(false), width(1920), height(1080), fps(25) {}
     
     // 自定义拷贝构造函数，处理 std::atomic 成员
@@ -38,7 +37,6 @@ struct Channel {
           source_url(other.source_url),
           status(other.status),
           enabled(other.enabled.load()),
-          push_enabled(other.push_enabled.load()),
           report_enabled(other.report_enabled.load()),
           width(other.width),
           height(other.height),

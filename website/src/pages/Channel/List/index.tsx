@@ -27,7 +27,6 @@ import {
   createChannel,
   updateChannel,
   deleteChannel,
-  setChannelPush,
   type Channel,
   type CreateChannelParams,
   type UpdateChannelParams,
@@ -89,7 +88,6 @@ function ChannelList() {
       name: values.name,
       source_url: values.source_url,
       enabled: values.enabled ?? true,
-      push_enabled: values.push_enabled ?? false,
       report_enabled: values.report_enabled ?? false,
     };
 
@@ -153,27 +151,6 @@ function ChannelList() {
       .catch((error) => {
         console.error("删除通道失败:", error);
         message.error("删除通道失败");
-      });
-  }
-
-  // 切换推流开关
-  function handlePushToggle(channelId: number, checked: boolean) {
-    setChannelPush(channelId, checked)
-      .then((response) => {
-        if (response.success) {
-          message.success(checked ? "开启推流成功" : "关闭推流成功");
-          loadChannels();
-        } else {
-          message.error(response.error || (checked ? "开启推流失败" : "关闭推流失败"));
-          // 如果失败，重新加载以恢复原状态
-          loadChannels();
-        }
-      })
-      .catch((error) => {
-        console.error("切换推流开关失败:", error);
-        message.error(checked ? "开启推流失败" : "关闭推流失败");
-        // 如果失败，重新加载以恢复原状态
-        loadChannels();
       });
   }
 
@@ -333,21 +310,6 @@ function ChannelList() {
       ),
     },
     {
-      title: "推送开关",
-      dataIndex: "push_enabled",
-      key: "push_enabled",
-      width: 100,
-      render: (pushEnabled: boolean, record: Channel) => (
-        <Switch
-          checked={pushEnabled}
-          onChange={(checked) => handlePushToggle(record.id, checked)}
-          disabled={!record.enabled}
-          checkedChildren="开"
-          unCheckedChildren="关"
-        />
-      ),
-    },
-    {
       title: "上报开关",
       dataIndex: "report_enabled",
       key: "report_enabled",
@@ -452,12 +414,10 @@ function ChannelList() {
                 name: editingChannel.name,
                 source_url: editingChannel.source_url,
                 enabled: editingChannel.enabled,
-                push_enabled: editingChannel.push_enabled,
                 report_enabled: editingChannel.report_enabled ?? false,
               }
             : {
                 enabled: true,
-                push_enabled: false,
                 report_enabled: false,
               }
         }
@@ -487,11 +447,6 @@ function ChannelList() {
         <ProFormSwitch
           name="enabled"
           label="启用"
-        />
-        <ProFormSwitch
-          name="push_enabled"
-          label="推送开关"
-          tooltip="是否启用推流功能"
         />
         <ProFormSwitch
           name="report_enabled"

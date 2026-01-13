@@ -51,9 +51,6 @@ void setupChannelRoutes(crow::SimpleApp& app,
             if (json_body.has("enabled")) {
                 channel.enabled = json_body["enabled"].b();
             }
-            if (json_body.has("push_enabled")) {
-                channel.push_enabled = json_body["push_enabled"].b();
-            }
             if (json_body.has("report_enabled")) {
                 channel.report_enabled = json_body["report_enabled"].b();
             }
@@ -108,7 +105,6 @@ void setupChannelRoutes(crow::SimpleApp& app,
             ch["source_url"] = channel->source_url;
             ch["status"] = channelStatusToString(channel->status);
             ch["enabled"] = channel->enabled.load();
-            ch["push_enabled"] = channel->push_enabled.load();
             ch["report_enabled"] = channel->report_enabled.load();
             ch["width"] = channel->width;
             ch["height"] = channel->height;
@@ -141,7 +137,6 @@ void setupChannelRoutes(crow::SimpleApp& app,
         response["channel"]["source_url"] = channel->source_url;
             response["channel"]["status"] = channelStatusToString(channel->status);
             response["channel"]["enabled"] = channel->enabled.load();
-            response["channel"]["push_enabled"] = channel->push_enabled.load();
             response["channel"]["report_enabled"] = channel->report_enabled.load();
             response["channel"]["width"] = channel->width;
             response["channel"]["height"] = channel->height;
@@ -187,9 +182,6 @@ void setupChannelRoutes(crow::SimpleApp& app,
             }
             if (json_body.has("enabled")) {
                 channel.enabled = json_body["enabled"].b();
-            }
-            if (json_body.has("push_enabled")) {
-                channel.push_enabled = json_body["push_enabled"].b();
             }
             if (json_body.has("report_enabled")) {
                 channel.report_enabled = json_body["report_enabled"].b();
@@ -252,50 +244,6 @@ void setupChannelRoutes(crow::SimpleApp& app,
         crow::json::wvalue response;
         response["success"] = success;
         return crow::response(response);
-    });
-    
-    // 推流开关API（保留配置，但不执行推流逻辑）
-    CROW_ROUTE(app, "/api/channels/<int>/push").methods("POST"_method)
-    ([](const crow::request& req, int channel_id) {
-        try {
-            auto json_body = crow::json::load(req.body);
-            if (!json_body) {
-                return crow::response(400, "Invalid JSON");
-            }
-            
-            if (!json_body.has("push_enabled")) {
-                return crow::response(400, "Missing push_enabled field");
-            }
-            
-            bool push_enabled = json_body["push_enabled"].b();
-            
-            auto& channel_manager = ChannelManager::getInstance();
-            auto channel = channel_manager.getChannel(channel_id);
-            
-            if (!channel) {
-                crow::json::wvalue response;
-                response["success"] = false;
-                response["error"] = "Channel not found";
-                return crow::response(404, response);
-            }
-            
-            // 更新push_enabled字段（仅保留配置）
-            channel->push_enabled = push_enabled;
-            bool success = channel_manager.updateChannel(channel_id, *channel);
-            
-            if (!success) {
-                crow::json::wvalue response;
-                response["success"] = false;
-                response["error"] = "Failed to update push_enabled";
-                return crow::response(500, response);
-            }
-            
-            crow::json::wvalue response;
-            response["success"] = true;
-            return crow::response(response);
-        } catch (const std::exception& e) {
-            return crow::response(500, std::string("Error: ") + e.what());
-        }
     });
     
 }

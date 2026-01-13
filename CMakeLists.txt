@@ -66,6 +66,9 @@ else()
     message(WARNING "vcpkg not found, using system libraries")
 endif()
 
+# 添加 cmake 模块路径
+list(APPEND CMAKE_MODULE_PATH ${CMAKE_SOURCE_DIR}/cmake)
+
 # 查找依赖包
 find_package(OpenCV REQUIRED)
 find_package(Threads REQUIRED)
@@ -74,6 +77,14 @@ find_package(Crow CONFIG REQUIRED)
 find_package(onnxruntime CONFIG REQUIRED)
 find_package(CURL REQUIRED)
 find_package(unofficial-mosquitto CONFIG REQUIRED)
+
+# 查找或编译 eXosip2（GB28181 SIP支持）
+find_package(Exosip2)
+if(EXOSIP2_FOUND)
+    message(STATUS "eXosip2 found or will be built from source")
+else()
+    message(WARNING "eXosip2 not found, GB28181 SIP features will be disabled")
+endif()
 
 # 包含基础目录
 include_directories(

@@ -23,6 +23,13 @@ target_link_libraries(${PROJECT_NAME}
     service
 )
 
+# 确保 eXosip2 ExternalProject 先构建（如果从源码编译）
+if(TARGET exosip2_libs_ready)
+    add_dependencies(${PROJECT_NAME} exosip2_libs_ready)
+elseif(TARGET exosip2 AND TARGET osip2)
+    add_dependencies(${PROJECT_NAME} exosip2 osip2)
+endif()
+
 target_compile_options(${PROJECT_NAME} PRIVATE
     $<$<CXX_COMPILER_ID:MSVC>:/W4>
     $<$<CXX_COMPILER_ID:GNU,Clang>:-Wall -Wextra -Wpedantic>

@@ -1,7 +1,7 @@
 # 模型库 (libmodels) - 通道管理和推流配置管理
 add_library(models SHARED
     channel.cpp
-    push_stream_config.cpp
+    gb28181_config.cpp
     alert.cpp
     algorithm_config.cpp
     report_config.cpp

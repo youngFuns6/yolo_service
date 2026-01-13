@@ -2,7 +2,8 @@
 add_library(stream STATIC
     stream_manager.cpp
     frame_callback.cpp
-    rtmp_streamer.cpp
+    gb28181_streamer.cpp
+    gb28181_sip_client.cpp
 )
 
 target_include_directories(stream PUBLIC
@@ -53,6 +54,51 @@ else()
     else()
         message(WARNING "FFmpeg libraries not found, RTMP push stream may not work")
     endif()
+endif()
+
+# 链接eXosip2库（由主CMakeLists.txt的FindExosip2模块处理）
+if(EXOSIP2_FOUND)
+    if(TARGET exosip2::exosip2)
+        # 使用导入目标（从源码编译）
+        message(STATUS "Linking eXosip2 from source build")
+        target_include_directories(stream PUBLIC ${EXOSIP2_INCLUDE_DIRS})
+        
+        # 直接链接库文件路径（确保依赖关系）
+        if(TARGET exosip2 AND TARGET osip2)
+            # 确保 ExternalProject 先构建
+            if(TARGET exosip2_libs_ready)
+                add_dependencies(stream exosip2_libs_ready)
+            else()
+                add_dependencies(stream exosip2 osip2)
+            endif()
+            # 从缓存变量获取安装目录
+            if(NOT DEFINED EXOSIP2_INSTALL_DIR)
+                set(EXOSIP2_INSTALL_DIR "${CMAKE_BINARY_DIR}/third_party/exosip2-install")
+            endif()
+            # 直接链接库文件
+            target_link_libraries(stream PUBLIC
+                ${EXOSIP2_INSTALL_DIR}/lib/${CMAKE_STATIC_LIBRARY_PREFIX}eXosip2${CMAKE_STATIC_LIBRARY_SUFFIX}
+                ${EXOSIP2_INSTALL_DIR}/lib/${CMAKE_STATIC_LIBRARY_PREFIX}osip2${CMAKE_STATIC_LIBRARY_SUFFIX}
+                ${EXOSIP2_INSTALL_DIR}/lib/${CMAKE_STATIC_LIBRARY_PREFIX}osipparser2${CMAKE_STATIC_LIBRARY_SUFFIX}
+            )
+        else()
+            # 使用导入目标
+            target_link_libraries(stream PUBLIC
+                exosip2::exosip2
+                osip2::osip2
+                osipparser2::osipparser2
+            )
+        endif()
+    else()
+        # 使用系统安装的库
+        message(STATUS "Linking eXosip2 from system")
+        target_include_directories(stream PUBLIC ${EXOSIP2_INCLUDE_DIRS})
+        target_link_libraries(stream PUBLIC ${EXOSIP2_LIBRARIES})
+    endif()
+else()
+    message(WARNING "eXosip2 not found, GB28181 SIP signaling will not work")
+    # 添加编译定义以禁用GB28181 SIP功能
+    target_compile_definitions(stream PRIVATE DISABLE_GB28181_SIP)
 endif()
 
 target_link_libraries(stream PUBLIC

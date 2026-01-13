@@ -2,8 +2,8 @@
 #include "config.h"
 #include "database.h"
 #include "channel.h"
-#include "push_stream_config.h"
 #include "algorithm_config.h"
+#include "gb28181_config.h"
 #include <iostream>
 #include <chrono>
 #include <thread>
@@ -67,47 +67,17 @@ std::string avErrorToString(int errnum) {
     return std::string(errbuf);
 }
 
-/**
- * @brief 初始化FFmpeg推流
- * @param context StreamContext指针
- * @param rtmp_url RTMP推流地址
- * @param width 推流宽度
- * @param height 推流高度
- * @param fps 帧率
- * @param bitrate 比特率（bps，可选）
- * @return 是否成功
- */
-bool StreamManager::initFFmpegPushStream(StreamContext* context, 
-                         const std::string& rtmp_url,
-                         int width, int height, int fps, 
-                         std::optional<int> bitrate) {
-    if (!context) {
-        return false;
-    }
-    
-    // 使用 RTMPStreamer 初始化推流
-    return context->rtmp_streamer.initialize(rtmp_url, width, height, fps, bitrate);
-}
-
-/**
- * @brief 清理FFmpeg推流资源
- * @param context StreamContext指针
- */
-void StreamManager::cleanupFFmpegPushStream(StreamContext* context) {
-    if (!context) {
-        return;
-    }
-    
-    // 使用 RTMPStreamer 关闭推流
-    if (context->rtmp_streamer.isInitialized()) {
-        context->rtmp_streamer.close();
-    }
-}
-
 StreamManager::StreamManager() {
+    // 初始化GB28181 SIP客户端
+    initGB28181SipClient();
 }
 
 StreamManager::~StreamManager() {
+    // 停止GB28181 SIP客户端
+    if (gb28181_sip_client_) {
+        gb28181_sip_client_->stop();
+    }
+    
     // 停止所有流
     std::unique_lock<std::mutex> lock(streams_mutex_);
     
@@ -150,15 +120,6 @@ StreamManager::~StreamManager() {
     for (auto& context : contexts_to_cleanup) {
         if (context) {
             context->cap.release();
-            
-            // 停止重连尝试
-            context->push_reconnect_needed = false;
-            context->push_reconnect_attempts = 0;
-            
-            // 释放推流资源
-            if (context->push_stream_enabled && context->rtmp_streamer.isInitialized()) {
-                cleanupFFmpegPushStream(context.get());
-            }
         }
     }
 }
@@ -183,9 +144,6 @@ bool StreamManager::startAnalysis(int channel_id, std::shared_ptr<Channel> chann
     
     auto context = std::make_unique<StreamContext>();
     context->running = true;
-    context->push_stream_enabled = false;  // 初始化为false，在streamWorker中根据通道状态设置
-    context->push_width = 0;
-    context->push_height = 0;
     
     // 解码URL中的HTML实体编码（如 &amp; -> &）
     std::string decoded_url = decodeUrlEntities(channel->source_url);
@@ -262,16 +220,6 @@ bool StreamManager::stopAnalysis(int channel_id) {
     auto& context_ref = it->second;
     context_ref->cap.release();
     
-    // 停止重连尝试
-    context_ref->push_reconnect_needed = false;
-    context_ref->push_reconnect_attempts = 0;
-    
-    // 释放推流资源
-    if (context_ref->push_stream_enabled && context_ref->rtmp_streamer.isInitialized()) {
-        cleanupFFmpegPushStream(context_ref.get());
-        std::cout << "通道 " << channel_id << " RTMP推流已停止" << std::endl;
-    }
-    
     streams_.erase(it);
     
     // 更新状态为stopped（如果enabled为false，则保持stopped；如果enabled为true，状态会在重新启动分析时更新）
@@ -341,77 +289,26 @@ void StreamManager::streamWorker(int channel_id, std::shared_ptr<Channel> channe
         }
     }
     
-    // 初始化推流（如果通道推流状态开启）
-    context->push_stream_enabled = channel->push_enabled.load();
-    context->push_width = 0;
-    context->push_height = 0;
-    if (context->push_stream_enabled) {
-        auto& push_stream_config_mgr = PushStreamConfigManager::getInstance();
-        PushStreamConfig push_config = push_stream_config_mgr.getPushStreamConfig();
-        
-        if (!push_config.rtmp_url.empty()) {
-            // 确定推流的尺寸和帧率
-            context->push_width = push_config.width.value_or(channel->width);
-            context->push_height = push_config.height.value_or(channel->height);
-            int push_fps = push_config.fps.value_or(channel->fps);
-            
-            // 验证推流配置的有效性
-            if (context->push_width <= 0 || context->push_height <= 0) {
-                std::cerr << "通道 " << channel_id << " RTMP推流启动失败: 推流尺寸无效 ("
-                          << context->push_width << "x" << context->push_height << ")" << std::endl;
-                context->push_stream_enabled = false;
-            } else if (push_fps <= 0) {
-                std::cerr << "通道 " << channel_id << " RTMP推流启动失败: 帧率无效 (" << push_fps << ")" << std::endl;
-                context->push_stream_enabled = false;
-            } else {
-                // 使用FFmpeg库进行RTMP推流
-                std::string output_url = push_config.rtmp_url;
-                
-                // 保存推流配置用于重连
-                context->push_rtmp_url = output_url;
-                context->push_fps = push_fps;
-                context->push_bitrate = push_config.bitrate;
-                context->push_reconnect_attempts = 0;
-                context->push_reconnect_needed = false;
-                
-                std::cout << "通道 " << channel_id << " 正在尝试启动RTMP推流: " << output_url 
-                          << " (尺寸: " << context->push_width << "x" << context->push_height 
-                          << ", 帧率: " << push_fps;
-                if (push_config.bitrate.has_value() && push_config.bitrate.value() > 0) {
-                    std::cout << ", 比特率: " << (push_config.bitrate.value() / 1000) << "kbps";
-                }
-                std::cout << ")" << std::endl;
-                
-                // 初始化FFmpeg推流
-                if (initFFmpegPushStream(context.get(), output_url, 
-                                        context->push_width, context->push_height, 
-                                        push_fps, push_config.bitrate)) {
-                    std::cout << "通道 " << channel_id << " RTMP推流已启动: " << output_url 
-                              << " (尺寸: " << context->push_width << "x" << context->push_height 
-                              << ", 帧率: " << push_fps << ")" << std::endl;
-                } else {
-                    std::cerr << "通道 " << channel_id << " RTMP推流启动失败: " << output_url << std::endl;
-                    std::cerr << "  可能的原因：" << std::endl;
-                    std::cerr << "  1. RTMP服务器地址不可达或配置错误" << std::endl;
-                    std::cerr << "  2. FFmpeg库初始化失败" << std::endl;
-                    std::cerr << "  3. 推流配置参数不正确（尺寸: " << context->push_width 
-                              << "x" << context->push_height << ", 帧率: " << push_fps << ")" << std::endl;
-                    std::cerr << "  4. 网络连接问题或RTMP服务器未运行" << std::endl;
-                    // 标记需要重连（如果通道推流仍然启用）
-                    if (channel->push_enabled.load()) {
-                        context->push_reconnect_needed = true;
-                        context->push_reconnect_time = std::chrono::steady_clock::now() + 
-                                                       std::chrono::seconds(5);  // 5秒后重连
-                        context->push_reconnect_attempts = 0;
-                    } else {
-                        context->push_stream_enabled = false;
-                    }
-                }
-            }
-        } else {
-            std::cerr << "通道 " << channel_id << " 推流已启用，但未配置RTMP地址" << std::endl;
-            context->push_stream_enabled = false;
+    // 初始化GB28181通道信息（如果启用）
+    auto& gb28181_config_mgr = GB28181ConfigManager::getInstance();
+    GB28181Config gb28181_config = gb28181_config_mgr.getGB28181Config();
+    if (gb28181_config.enabled.load()) {
+        // 生成通道编码（基于设备ID和通道ID）
+        // GB28181通道编码格式：设备ID前10位 + 通道类型码(131/132/137等) + 通道序号(4位)
+        std::string channel_code;
+        if (gb28181_config.device_id.length() >= 10) {
+            char channel_str[5];
+            snprintf(channel_str, sizeof(channel_str), "%04d", channel_id);
+            channel_code = gb28181_config.device_id.substr(0, 10) + "132" + std::string(channel_str) + 
+                          gb28181_config.device_id.substr(gb28181_config.device_id.length() - 3);
         }
+        
+        context->gb28181_info.channel_id = channel_id;
+        context->gb28181_info.channel_code = channel_code;
+        context->gb28181_info.is_active = false;  // 初始状态未激活，等待上级平台请求
+        
+        std::cout << "StreamManager: 通道 " << channel_id 
+                  << " GB28181已启用，通道编码: " << channel_code << std::endl;
     }
     
     cv::Mat frame, processed_frame;
@@ -539,105 +436,18 @@ void StreamManager::streamWorker(int channel_id, std::shared_ptr<Channel> channe
             }
         }
         
-        // 检查是否需要重连推流
-        if (context->push_reconnect_needed) {
-            // 如果通道推流已被禁用，停止重连
-            if (!channel->push_enabled.load()) {
-                std::cout << "通道 " << channel_id << " 推流已被禁用，停止重连尝试" << std::endl;
-                context->push_reconnect_needed = false;
-                context->push_stream_enabled = false;
-                context->push_reconnect_attempts = 0;
-            } else {
-                auto current_time = std::chrono::steady_clock::now();
-                if (current_time >= context->push_reconnect_time) {
-                    std::cout << "通道 " << channel_id << " 开始尝试重连RTMP推流 (第 " 
-                              << context->push_reconnect_attempts << " 次)..." << std::endl;
-                    
-                    // 尝试重新初始化推流
-                    if (initFFmpegPushStream(context.get(), context->push_rtmp_url,
-                                            context->push_width, context->push_height,
-                                            context->push_fps, context->push_bitrate)) {
-                        std::cout << "通道 " << channel_id << " RTMP推流重连成功" << std::endl;
-                        context->push_reconnect_needed = false;
-                        context->push_reconnect_attempts = 0;  // 重置重连计数
-                        context->push_stream_enabled = true;
-                    } else {
-                        std::cerr << "通道 " << channel_id << " RTMP推流重连失败，将在5秒后再次尝试" << std::endl;
-                        // 更新重连时间，延长重连间隔（指数退避）
-                        int delay_seconds = std::min(5 + context->push_reconnect_attempts * 2, 30);  // 最多30秒
-                        context->push_reconnect_time = current_time + std::chrono::seconds(delay_seconds);
-                    }
-                }
-            }
-        }
-        
-        // 推流处理：如果通道推流状态开启，则进行推流
-        if (context->push_stream_enabled && context->rtmp_streamer.isInitialized()) {
-            // 根据检测状态决定推流内容
-            cv::Mat frame_to_push;
-            // 如果通道启用了检测功能（enabled=true），推送分析后的视频数据
-            // 如果检测器存在且进行了检测，processed_frame 包含检测框；否则是原始帧的克隆
-            // 如果通道未启用检测，推送原始通道视频数据
-            if (channel->enabled.load() && detector) {
-                // 检测开启，推送分析后的视频数据（带检测框的帧或原始帧）
-                frame_to_push = processed_frame;
-            } else {
-                // 检测未开启，推送原始通道视频数据
-                frame_to_push = frame;
-            }
+        // GB28181推流处理（如果通道激活）
+        if (context->gb28181_info.is_active && context->gb28181_info.streamer && 
+            context->gb28181_info.streamer->isStreaming()) {
+            // 推送处理后的帧到GB28181
+            cv::Mat frame_to_push = processed_frame;
             
-            // 如果推流尺寸与帧尺寸不一致，需要调整大小
-            cv::Mat resized_frame;
-            if (context->push_width > 0 && context->push_height > 0 && 
-                (frame_to_push.cols != context->push_width || frame_to_push.rows != context->push_height)) {
-                cv::resize(frame_to_push, resized_frame, cv::Size(context->push_width, context->push_height));
-                frame_to_push = resized_frame;
-            }
-            
-            // 使用 RTMPStreamer 推送帧
-            // 确保帧格式和尺寸正确
-            if (frame_to_push.empty()) {
-                std::cerr << "通道 " << channel_id << " 推流帧为空，跳过" << std::endl;
-            } else if (frame_to_push.type() != CV_8UC3) {
-                std::cerr << "通道 " << channel_id << " 推流帧格式错误: 期望 CV_8UC3, 实际 " 
-                          << frame_to_push.type() << "，跳过" << std::endl;
-            } else if (frame_to_push.cols != context->push_width || 
-                       frame_to_push.rows != context->push_height) {
-                std::cerr << "通道 " << channel_id << " 推流帧尺寸不匹配: 期望 " 
-                          << context->push_width << "x" << context->push_height 
-                          << ", 实际 " << frame_to_push.cols << "x" << frame_to_push.rows 
-                          << "，跳过" << std::endl;
-            } else {
-                if (!context->rtmp_streamer.pushFrame(frame_to_push)) {
-                    // 推送失败，可能是连接断开
-                    std::cerr << "通道 " << channel_id << " RTMP推流推送帧失败，将尝试重连" << std::endl;
-                    
-                    // 清理推流资源
-                    cleanupFFmpegPushStream(context.get());
-                    
-                    // 如果通道推流仍然启用，标记需要重连
-                    if (channel->push_enabled.load()) {
-                        context->push_reconnect_needed = true;
-                        context->push_reconnect_time = std::chrono::steady_clock::now() + 
-                                                       std::chrono::seconds(3);  // 3秒后重连
-                        context->push_reconnect_attempts++;
-                        
-                        // 限制重连次数，避免无限重连
-                        const int MAX_RECONNECT_ATTEMPTS = 10;
-                        if (context->push_reconnect_attempts > MAX_RECONNECT_ATTEMPTS) {
-                            std::cerr << "通道 " << channel_id << " RTMP推流重连次数超过限制（" 
-                                      << MAX_RECONNECT_ATTEMPTS << "次），停止重连" << std::endl;
-                            context->push_stream_enabled = false;
-                            context->push_reconnect_needed = false;
-                        } else {
-                            std::cout << "通道 " << channel_id << " 将在3秒后尝试第 " 
-                                      << context->push_reconnect_attempts << " 次重连" << std::endl;
-                        }
-                    } else {
-                        // 通道推流已禁用，不再重连
-                        context->push_stream_enabled = false;
-                        context->push_reconnect_needed = false;
-                    }
+            // 如果GB28181配置有特定的尺寸要求，这里可以调整
+            // 目前直接推送处理后的帧
+            if (!context->gb28181_info.streamer->pushFrame(frame_to_push)) {
+                // 推送失败，记录日志
+                if (frame_counter % 100 == 0) {  // 每100帧打印一次，避免刷屏
+                    std::cerr << "通道 " << channel_id << " GB28181推流失败" << std::endl;
                 }
             }
         }
@@ -667,5 +477,147 @@ void StreamManager::streamWorker(int channel_id, std::shared_ptr<Channel> channe
         last_time = std::chrono::steady_clock::now();
     }
 }
+
+bool StreamManager::initGB28181SipClient() {
+    auto& config_mgr = GB28181ConfigManager::getInstance();
+    GB28181Config config = config_mgr.getGB28181Config();
+    
+    if (!config.enabled.load()) {
+        std::cout << "GB28181: 未启用，跳过SIP客户端初始化" << std::endl;
+        return false;
+    }
+    
+    gb28181_sip_client_ = std::make_unique<GB28181SipClient>();
+    
+    if (!gb28181_sip_client_->initialize(config)) {
+        std::cerr << "GB28181 SIP: 初始化失败" << std::endl;
+        gb28181_sip_client_.reset();
+        return false;
+    }
+    
+    // 设置回调
+    gb28181_sip_client_->setInviteCallback(
+        [this](const GB28181Session& session) {
+            handleGB28181Invite(session);
+        }
+    );
+    
+    gb28181_sip_client_->setByeCallback(
+        [this](const std::string& channel_id) {
+            handleGB28181Bye(channel_id);
+        }
+    );
+    
+    // 启动SIP客户端
+    if (!gb28181_sip_client_->start()) {
+        std::cerr << "GB28181 SIP: 启动失败" << std::endl;
+        gb28181_sip_client_.reset();
+        return false;
+    }
+    
+    std::cout << "GB28181 SIP: 初始化并启动成功" << std::endl;
+    return true;
+}
+
+void StreamManager::handleGB28181Invite(const GB28181Session& session) {
+    std::cout << "GB28181: 收到Invite请求，通道=" << session.channel_id 
+              << ", 目标=" << session.dest_ip << ":" << session.dest_port << std::endl;
+    
+    // 从通道编码中提取通道ID（简化版，假设通道编码的第14-17位是通道ID）
+    int channel_id = 0;
+    if (session.channel_id.length() >= 17) {
+        try {
+            std::string channel_str = session.channel_id.substr(13, 4);
+            channel_id = std::stoi(channel_str);
+        } catch (...) {
+            std::cerr << "GB28181: 无法从通道编码解析通道ID: " << session.channel_id << std::endl;
+            return;
+        }
+    }
+    
+    std::lock_guard<std::mutex> lock(streams_mutex_);
+    auto it = streams_.find(channel_id);
+    if (it == streams_.end() || !it->second) {
+        std::cerr << "GB28181: 通道 " << channel_id << " 未在运行" << std::endl;
+        return;
+    }
+    
+    auto& context = it->second;
+    
+    // 初始化GB28181推流器
+    if (!context->gb28181_info.streamer) {
+        context->gb28181_info.streamer = std::make_unique<GB28181Streamer>();
+    }
+    
+    // 获取通道信息
+    auto& channel_mgr = ChannelManager::getInstance();
+    auto channel = channel_mgr.getChannel(channel_id);
+    if (!channel) {
+        std::cerr << "GB28181: 无法获取通道 " << channel_id << " 的信息" << std::endl;
+        return;
+    }
+    
+    // 获取GB28181配置
+    auto& config_mgr = GB28181ConfigManager::getInstance();
+    GB28181Config gb28181_config = config_mgr.getGB28181Config();
+    
+    // 初始化推流器
+    if (!context->gb28181_info.streamer->initialize(
+            gb28181_config,
+            channel->width,
+            channel->height,
+            channel->fps,
+            session.dest_ip,
+            session.dest_port,
+            session.ssrc)) {
+        std::cerr << "GB28181: 推流器初始化失败" << std::endl;
+        return;
+    }
+    
+    // 标记通道为活跃
+    context->gb28181_info.is_active = true;
+    
+    // 发送200 OK
+    if (gb28181_sip_client_) {
+        gb28181_sip_client_->sendInviteOk(session);
+    }
+    
+    std::cout << "GB28181: 通道 " << channel_id << " 推流已启动" << std::endl;
+}
+
+void StreamManager::handleGB28181Bye(const std::string& channel_id_str) {
+    std::cout << "GB28181: 收到Bye请求，通道=" << channel_id_str << std::endl;
+    
+    // 从通道编码中提取通道ID
+    int channel_id = 0;
+    if (channel_id_str.length() >= 17) {
+        try {
+            std::string channel_str = channel_id_str.substr(13, 4);
+            channel_id = std::stoi(channel_str);
+        } catch (...) {
+            std::cerr << "GB28181: 无法从通道编码解析通道ID: " << channel_id_str << std::endl;
+            return;
+        }
+    }
+    
+    std::lock_guard<std::mutex> lock(streams_mutex_);
+    auto it = streams_.find(channel_id);
+    if (it == streams_.end() || !it->second) {
+        return;
+    }
+    
+    auto& context = it->second;
+    
+    // 停止推流
+    if (context->gb28181_info.streamer) {
+        context->gb28181_info.streamer->close();
+    }
+    
+    // 标记通道为非活跃
+    context->gb28181_info.is_active = false;
+    
+    std::cout << "GB28181: 通道 " << channel_id << " 推流已停止" << std::endl;
+}
+
 } // namespace detector_service
 

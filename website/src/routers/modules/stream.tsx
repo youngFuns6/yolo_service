@@ -7,7 +7,7 @@ import { FaVideo } from "react-icons/fa";
 export default [
   {
     path: "/stream",
-    name: "推流配置",
+    name: "流媒体配置",
     icon: <FaVideo />,
     element: <LayoutIndex />,
     meta: {
@@ -16,8 +16,8 @@ export default [
     children: [
       {
         index: true,
-        name: "推流配置",
-        element: lazyLoad(lazy(() => import("@/pages/PushStreamConfig"))),
+        name: "GB28181 配置",
+        element: lazyLoad(lazy(() => import("@/pages/GB28181Config"))),
       },
       {
         path: "report",
