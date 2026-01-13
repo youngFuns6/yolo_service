@@ -7,6 +7,7 @@
 #include <atomic>
 #include <thread>
 #include <queue>
+#include <chrono>
 #include "report_config.h"
 #include "alert.h"
 #include <mosquitto.h>
@@ -32,11 +33,8 @@ public:
     // 清理资源
     void cleanup();
     
-    // 停止 MQTT 连接和重连（当上报被禁用时调用）
+    // 停止 MQTT 连接（当上报被禁用时调用）
     void stopMqttConnection();
-    
-    // 触发 MQTT 连接（当上报被启用时调用）
-    void triggerReconnect(const ReportConfig& config);
 
 private:
     ReportService();
@@ -71,39 +69,7 @@ private:
     bool mqtt_initialized_;
     bool mqtt_connected_;
     bool mqtt_connect_failed_;
-    
-    // MQTT 重连相关
-    std::thread reconnect_thread_;
-    std::atomic<bool> should_reconnect_;
-    std::atomic<bool> reconnect_thread_running_;
-    std::mutex reconnect_mutex_;
-    std::condition_variable reconnect_cv_;
-    
-    // 保存重连所需的配置信息（不包含 atomic，可以复制）
-    struct ReconnectConfig {
-        std::string mqtt_broker;
-        int mqtt_port;
-        std::string mqtt_topic;
-        std::string mqtt_username;
-        std::string mqtt_password;
-        std::string mqtt_client_id;
-        bool enabled;
-    };
-    ReconnectConfig reconnect_config_;  // 保存当前配置用于重连
-    static constexpr int RECONNECT_INTERVAL_SECONDS = 5;  // 重连间隔（秒）
-    static constexpr int MAX_RECONNECT_ATTEMPTS = 0;  // 0 表示无限重试
-    
-    // 重连线程函数
-    void reconnectWorker();
-    
-    // 执行重连（在新线程中调用，使用指数退避策略）
-    void performReconnect();
-    
-    // 执行重连
-    bool attemptReconnect(const ReconnectConfig& config);
-    
-    // 从 ReportConfig 创建 ReconnectConfig
-    ReconnectConfig createReconnectConfig(const ReportConfig& config);
+    std::chrono::steady_clock::time_point last_reconnect_attempt_;  // 上次重连尝试时间
     
     // 异步上报任务结构（使用可复制的配置，避免 atomic 复制问题）
     struct ReportTaskConfig {

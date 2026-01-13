@@ -207,8 +207,8 @@ bool StreamManager::startAnalysis(int channel_id, std::shared_ptr<Channel> chann
     std::string updated_at = getCurrentTime();
     db.updateChannelStatus(channel_id, "running", updated_at);
     
-    // 优化RTSP流设置以减少延迟和丢帧
-    context->cap.set(cv::CAP_PROP_BUFFERSIZE, 1);  // 最小缓冲区，减少延迟
+    // 优化RTSP流设置以提升稳定性和流畅度
+    context->cap.set(cv::CAP_PROP_BUFFERSIZE, 1);  // 最小缓冲区（1帧），减少延迟，避免缓冲积压导致卡顿
     context->cap.set(cv::CAP_PROP_FPS, channel->fps);
     // 设置 FFmpeg 选项以优化 RTSP 流读取
     context->cap.set(cv::CAP_PROP_FOURCC, cv::VideoWriter::fourcc('H', '2', '6', '4'));
@@ -450,7 +450,7 @@ void StreamManager::streamWorker(int channel_id, std::shared_ptr<Channel> channe
         context->cap.open(decoded_url, cv::CAP_FFMPEG);
         if (context->cap.isOpened()) {
             // 重新设置参数
-            context->cap.set(cv::CAP_PROP_BUFFERSIZE, 1);
+            context->cap.set(cv::CAP_PROP_BUFFERSIZE, 1);  // 最小缓冲区，避免缓冲积压
             context->cap.set(cv::CAP_PROP_FPS, channel->fps);
             context->cap.set(cv::CAP_PROP_FOURCC, cv::VideoWriter::fourcc('H', '2', '6', '4'));
             std::cout << "通道 " << channel_id << " RTSP流重连成功" << std::endl;
@@ -472,33 +472,9 @@ void StreamManager::streamWorker(int channel_id, std::shared_ptr<Channel> channe
     };
     
     while (context->running.load()) {
-        // 使用 grab() 快速跳过中间帧，只处理最新帧
-        // 这样可以避免缓冲区堆积，减少"reader is too slow"的问题
-        // 连续 grab 多次，只处理最后一帧（最多跳过4帧）
-        int grab_count = 0;
-        bool grab_success = true;
-        while (grab_count < 4 && (grab_success = context->cap.grab())) {
-            grab_count++;  // 跳过中间帧，只保留最新帧
-        }
-        
-        // 如果最后一次 grab 失败，说明没有新帧，等待后继续
-        if (!grab_success && grab_count == 0) {
-            consecutive_failures++;
-            if (consecutive_failures >= MAX_CONSECUTIVE_FAILURES) {
-                if (!reconnectStream()) {
-                    std::this_thread::sleep_for(std::chrono::milliseconds(1000));
-                }
-            } else {
-                std::this_thread::sleep_for(std::chrono::milliseconds(100));
-            }
-            continue;
-        }
-        
-        // 检查是否需要检测（降低检测频率）
-        bool need_detection = (frame_counter % detection_interval == 0);
-        
-        // retrieve 最新帧
-        bool read_success = context->cap.retrieve(frame);
+        // *** 优化帧处理策略：不跳帧，确保推流流畅 ***
+        // 直接读取每一帧，避免跳帧导致推流卡顿
+        bool read_success = context->cap.read(frame);
         
         if (!read_success || frame.empty()) {
             consecutive_failures++;
@@ -518,6 +494,9 @@ void StreamManager::streamWorker(int channel_id, std::shared_ptr<Channel> channe
         // 成功读取帧，重置失败计数
         consecutive_failures = 0;
         frame_counter++;
+        
+        // 检查是否需要检测（降低检测频率）
+        bool need_detection = (frame_counter % detection_interval == 0);
         
         // 调整大小
         if (frame.cols != channel->width || frame.rows != channel->height) {
@@ -616,10 +595,19 @@ void StreamManager::streamWorker(int channel_id, std::shared_ptr<Channel> channe
             }
             
             // 使用 RTMPStreamer 推送帧
-            if (frame_to_push.cols == context->push_width && 
-                frame_to_push.rows == context->push_height &&
-                frame_to_push.type() == CV_8UC3) {
-                
+            // 确保帧格式和尺寸正确
+            if (frame_to_push.empty()) {
+                std::cerr << "通道 " << channel_id << " 推流帧为空，跳过" << std::endl;
+            } else if (frame_to_push.type() != CV_8UC3) {
+                std::cerr << "通道 " << channel_id << " 推流帧格式错误: 期望 CV_8UC3, 实际 " 
+                          << frame_to_push.type() << "，跳过" << std::endl;
+            } else if (frame_to_push.cols != context->push_width || 
+                       frame_to_push.rows != context->push_height) {
+                std::cerr << "通道 " << channel_id << " 推流帧尺寸不匹配: 期望 " 
+                          << context->push_width << "x" << context->push_height 
+                          << ", 实际 " << frame_to_push.cols << "x" << frame_to_push.rows 
+                          << "，跳过" << std::endl;
+            } else {
                 if (!context->rtmp_streamer.pushFrame(frame_to_push)) {
                     // 推送失败，可能是连接断开
                     std::cerr << "通道 " << channel_id << " RTMP推流推送帧失败，将尝试重连" << std::endl;
@@ -659,10 +647,11 @@ void StreamManager::streamWorker(int channel_id, std::shared_ptr<Channel> channe
             try {
                 frame_callback_(channel_id, processed_frame, detections);
             } catch (const std::exception& e) {
-                std::cerr << "调用帧回调函数时发生异常: " << e.what() << std::endl;
+                // 减少异常日志输出频率，避免日志刷屏
+                if (frame_counter % 100 == 0) {
+                    std::cerr << "调用帧回调函数时发生异常: " << e.what() << std::endl;
+                }
             }
-        } else {
-            std::cerr << "错误: 通道 " << channel_id << " 的帧回调函数未设置，无法发送分析流数据" << std::endl;
         }
         
         // 控制帧率
@@ -678,6 +667,5 @@ void StreamManager::streamWorker(int channel_id, std::shared_ptr<Channel> channe
         last_time = std::chrono::steady_clock::now();
     }
 }
-
 } // namespace detector_service
 

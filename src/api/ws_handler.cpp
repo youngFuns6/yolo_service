@@ -139,8 +139,8 @@ void WebSocketHandler::broadcastFrame(int channel_id, const cv::Mat& frame) {
 }
 
 void WebSocketHandler::sendWorker() {
-    const int MAX_FPS = 30;  // 最大发送帧率
-    const auto min_frame_interval = std::chrono::milliseconds(1000 / MAX_FPS);
+    // 移除帧率限制，立即发送最新帧以减少延迟
+    // 如果需要限制帧率，可以通过检测间隔来控制
     auto last_send_time = std::chrono::steady_clock::now();
     
     while (running_) {
@@ -160,30 +160,31 @@ void WebSocketHandler::sendWorker() {
         latest_frames_.clear();  // 清空，等待新帧
         lock.unlock();
         
-        // 控制发送速率
-        auto current_time = std::chrono::steady_clock::now();
-        auto elapsed = current_time - last_send_time;
-        if (elapsed < min_frame_interval) {
-            auto sleep_time = min_frame_interval - elapsed;
-            std::this_thread::sleep_for(sleep_time);
-        }
-        
         // 发送每个通道的最新帧
         for (const auto& pair : frames_to_send) {
             int channel_id = pair.first;
             const FrameData& frame_data = pair.second;
             
-            // 检查是否有订阅者
-            std::lock_guard<std::mutex> conn_lock(connections_mutex_);
-            auto it = channel_subscriptions_.find(channel_id);
-            if (it == channel_subscriptions_.end() || it->second.empty()) {
-                continue;  // 没有订阅者，跳过
+            // 检查是否有订阅者（快速检查，避免不必要的编码）
+            {
+                std::lock_guard<std::mutex> conn_lock(connections_mutex_);
+                auto it = channel_subscriptions_.find(channel_id);
+                if (it == channel_subscriptions_.end() || it->second.empty()) {
+                    continue;  // 没有订阅者，跳过编码和发送
+                }
             }
             
-            // 编码帧数据
+            // 编码帧数据（在锁外执行，避免阻塞其他通道）
+            // 注意：编码是耗时操作，但必须同步执行以确保数据一致性
             std::string json = frameToJson(channel_id, frame_data.frame);
             
             // 发送给所有订阅者
+            std::lock_guard<std::mutex> conn_lock(connections_mutex_);
+            auto it = channel_subscriptions_.find(channel_id);
+            if (it == channel_subscriptions_.end() || it->second.empty()) {
+                continue;  // 订阅者可能在编码期间断开
+            }
+            
             std::vector<crow::websocket::connection*> to_remove;
             for (auto* conn : it->second) {
                 if (conn) {
@@ -229,8 +230,9 @@ std::string WebSocketHandler::alertToJson(const AlertMessage& alert) {
 }
 
 std::string WebSocketHandler::frameToJson(int channel_id, const cv::Mat& frame) {
-    // 使用优化的 JPEG 质量参数（75-80 平衡质量和大小）
-    std::string image_base64 = ImageUtils::matToBase64(frame, ".jpg", 75);
+    // 使用较低的 JPEG 质量参数（60）以减少编码时间和数据大小，降低延迟
+    // 对于实时视频流，60 的质量已经足够清晰
+    std::string image_base64 = ImageUtils::matToBase64(frame, ".jpg", 60);
     
     nlohmann::json j;
     j["type"] = "frame";

@@ -52,7 +52,7 @@ private:
         cv::VideoCapture cap;
         
         // RTMP推流相关
-        RTMPStreamer rtmp_streamer;        // RTMP推流器实例
+        RTMPStreamer rtmp_streamer;        // RTMP推流器
         
         bool push_stream_enabled;          // 是否启用推流
         int push_width;                    // 推流宽度

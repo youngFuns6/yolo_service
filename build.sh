@@ -101,7 +101,19 @@ determine_triplet() {
             VCPKG_TRIPLET="x86-linux"
             ;;
         linux-arm64)
-            VCPKG_TRIPLET="arm64-linux"
+            # 在非 ARM64 主机上交叉编译时，使用自定义 triplet
+            if [ "$(uname -m)" != "aarch64" ]; then
+                # 检查是否有自定义 triplet 文件
+                if [ -f "$SCRIPT_DIR/triplets/arm64-linux.cmake" ]; then
+                    VCPKG_TRIPLET="arm64-linux"
+                    CUSTOM_TRIPLET="$SCRIPT_DIR/triplets/arm64-linux.cmake"
+                else
+                    echo -e "${YELLOW}警告: 未找到自定义 triplet，尝试使用标准 triplet${NC}"
+                    VCPKG_TRIPLET="arm64-linux"
+                fi
+            else
+                VCPKG_TRIPLET="arm64-linux"
+            fi
             ;;
         linux-armv7)
             VCPKG_TRIPLET="arm-linux"
@@ -311,6 +323,38 @@ configure_cmake() {
     
     # 交叉编译工具链配置
     case "${PLATFORM}" in
+        linux)
+            # Linux ARM64 交叉编译配置
+            if [ "$ARCH" = "arm64" ] && [ "$(uname -m)" != "aarch64" ]; then
+                echo -e "${YELLOW}检测到 Linux ARM64 交叉编译环境${NC}"
+                
+                # 检查 ARM64 交叉编译工具链是否安装
+                if command -v aarch64-linux-gnu-g++ >/dev/null 2>&1; then
+                    echo -e "${GREEN}找到 ARM64 交叉编译工具链${NC}"
+                    # 注意：不设置全局 CC/CXX 环境变量，避免影响 vcpkg 构建 x64-linux 工具包
+                    # 只通过 CMake 参数指定目标架构的编译器
+                    CMAKE_ARGS+=(
+                        -DCMAKE_SYSTEM_NAME=Linux
+                        -DCMAKE_SYSTEM_PROCESSOR=aarch64
+                        -DCMAKE_C_COMPILER=aarch64-linux-gnu-gcc
+                        -DCMAKE_CXX_COMPILER=aarch64-linux-gnu-g++
+                        -DCMAKE_AR=aarch64-linux-gnu-ar
+                        -DCMAKE_STRIP=aarch64-linux-gnu-strip
+                        -DCMAKE_FIND_ROOT_PATH_MODE_PROGRAM=NEVER
+                        -DCMAKE_FIND_ROOT_PATH_MODE_LIBRARY=ONLY
+                        -DCMAKE_FIND_ROOT_PATH_MODE_INCLUDE=ONLY
+                        -DCMAKE_FIND_ROOT_PATH_MODE_PACKAGE=ONLY
+                    )
+                else
+                    echo -e "${RED}错误: 未找到 ARM64 交叉编译工具链${NC}"
+                    echo -e "${YELLOW}请安装交叉编译工具链:${NC}"
+                    echo -e "${BLUE}  Ubuntu/Debian: sudo apt-get install gcc-aarch64-linux-gnu g++-aarch64-linux-gnu${NC}"
+                    echo -e "${BLUE}  Fedora/RHEL:   sudo dnf install gcc-aarch64-linux-gnu gcc-c++-aarch64-linux-gnu${NC}"
+                    echo -e "${BLUE}  Arch Linux:    sudo pacman -S aarch64-linux-gnu-gcc${NC}"
+                    exit 1
+                fi
+            fi
+            ;;
         android)
             if [ -z "$ANDROID_NDK" ]; then
                 echo -e "${YELLOW}警告: ANDROID_NDK 未设置，Android 交叉编译可能需要额外配置${NC}"
