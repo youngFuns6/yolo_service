@@ -60,8 +60,6 @@ bool GB28181SipClient::initialize(const GB28181Config& config) {
     eXosip_set_user_agent(exosip_context, user_agent.c_str());
     
     initialized = true;
-    std::cout << "GB28181 SIP: 初始化成功，监听端口 " << config.local_sip_port << std::endl;
-    
     return true;
 }
 
@@ -79,7 +77,6 @@ bool GB28181SipClient::start() {
     // 启动事件处理线程
     running = true;
     event_thread = std::thread(&GB28181SipClient::eventLoop, this);
-    std::cout << "GB28181 SIP: 事件处理线程已启动" << std::endl;
     
     // 启动心跳线程
     heartbeat_thread = std::thread([this]() {
@@ -106,7 +103,6 @@ bool GB28181SipClient::start() {
         return false;
     }
     
-    std::cout << "GB28181 SIP: 客户端启动成功" << std::endl;
     return true;
 }
 
@@ -137,21 +133,13 @@ void GB28181SipClient::stop() {
     }
     
     initialized = false;
-    std::cout << "GB28181 SIP: 客户端已停止" << std::endl;
 }
 
 void GB28181SipClient::eventLoop() {
-    std::cout << "GB28181 SIP: eventLoop 线程开始运行" << std::endl;
-    int loop_count = 0;
     while (running.load()) {
         handleEvent();
-        loop_count++;
-        if (loop_count % 200 == 0) {  // 每10秒打印一次（200 * 50ms = 10秒）
-            std::cout << "GB28181 SIP: eventLoop 运行中，已处理 " << loop_count << " 次循环" << std::endl;
-        }
         std::this_thread::sleep_for(std::chrono::milliseconds(50));
     }
-    std::cout << "GB28181 SIP: eventLoop 线程退出" << std::endl;
 }
 
 void GB28181SipClient::handleEvent() {
@@ -165,7 +153,6 @@ void GB28181SipClient::handleEvent() {
     
     switch (event->type) {
         case EXOSIP_REGISTRATION_SUCCESS:
-            std::cout << "GB28181 SIP: 注册成功" << std::endl;
             break;
             
         case EXOSIP_REGISTRATION_FAILURE:
@@ -173,18 +160,15 @@ void GB28181SipClient::handleEvent() {
             break;
             
         case EXOSIP_CALL_INVITE:
-            std::cout << "GB28181 SIP: 收到Invite请求" << std::endl;
             handleInvite(event);
             break;
             
         case EXOSIP_CALL_CLOSED:
         case EXOSIP_CALL_RELEASED:
-            std::cout << "GB28181 SIP: 通话结束" << std::endl;
             handleBye(event);
             break;
             
         case EXOSIP_MESSAGE_NEW:
-            std::cout << "GB28181 SIP: 收到Message请求" << std::endl;
             handleMessage(event);
             break;
             
@@ -245,7 +229,6 @@ bool GB28181SipClient::doRegister() {
         return false;
     }
     
-    std::cout << "GB28181 SIP: 已发送注册请求到 " << proxy_uri << std::endl;
     return true;
 }
 
@@ -367,10 +350,6 @@ void GB28181SipClient::handleInvite(void* evt) {
     eXosip_lock(exosip_context);
     eXosip_call_send_answer(exosip_context, event->tid, 180, nullptr);
     eXosip_unlock(exosip_context);
-    
-    std::cout << "GB28181 SIP: Invite处理完成，通道=" << channel_id 
-              << ", 目标=" << dest_ip << ":" << dest_port 
-              << ", SSRC=" << ssrc << std::endl;
 }
 
 bool GB28181SipClient::sendInviteOk(const GB28181Session& session) {
@@ -400,7 +379,6 @@ bool GB28181SipClient::sendInviteOk(const GB28181Session& session) {
         return false;
     }
     
-    std::cout << "GB28181 SIP: 已发送200 OK" << std::endl;
     return true;
 }
 
@@ -430,8 +408,6 @@ void GB28181SipClient::handleBye(void* evt) {
         // 移除会话
         std::lock_guard<std::mutex> lock(sessions_mutex);
         active_sessions.erase(channel_id);
-        
-        std::cout << "GB28181 SIP: 通话结束，通道=" << channel_id << std::endl;
     }
 }
 
@@ -535,8 +511,6 @@ void GB28181SipClient::respondCatalogQuery(void* evt) {
     
     ret = eXosip_message_send_request(exosip_context, message);
     eXosip_unlock(exosip_context);
-    
-    std::cout << "GB28181 SIP: 已发送目录响应，通道数=" << config.max_channels << std::endl;
 }
 
 void GB28181SipClient::respondDeviceInfo(void* evt) {
@@ -590,8 +564,6 @@ void GB28181SipClient::respondDeviceInfo(void* evt) {
     
     ret = eXosip_message_send_request(exosip_context, message);
     eXosip_unlock(exosip_context);
-    
-    std::cout << "GB28181 SIP: 已发送设备信息响应" << std::endl;
 }
 
 void GB28181SipClient::respondDeviceStatus(void* evt) {
@@ -643,8 +615,6 @@ void GB28181SipClient::respondDeviceStatus(void* evt) {
     
     ret = eXosip_message_send_request(exosip_context, message);
     eXosip_unlock(exosip_context);
-    
-    std::cout << "GB28181 SIP: 已发送设备状态响应" << std::endl;
 }
 
 std::string GB28181SipClient::getChannelId(int channel_index) const {

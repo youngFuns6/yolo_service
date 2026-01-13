@@ -22,7 +22,6 @@ void ReportService::on_connect(struct mosquitto* mosq, void* obj, int rc) {
         // 连接成功
         service->mqtt_connected_ = true;
         service->mqtt_connect_failed_ = false;
-        std::cout << "MQTT 连接成功" << std::endl;
     } else {
         // 连接失败，销毁客户端
         service->mqtt_connected_ = false;
@@ -41,12 +40,6 @@ void ReportService::on_disconnect(struct mosquitto* mosq, void* obj, int rc) {
     std::unique_lock<std::mutex> lock(service->mqtt_mutex_);
     
     service->mqtt_connected_ = false;
-    
-    if (rc != 0) {
-        std::cout << "MQTT 非正常断开连接，将自动重连..." << std::endl;
-    } else {
-        std::cout << "MQTT 正常断开连接" << std::endl;
-    }
 }
 
 // HTTP 回调函数，用于接收响应
@@ -154,7 +147,6 @@ bool ReportService::reportViaHttp(const AlertRecord& alert, const std::string& u
         return false;
     }
     
-    std::cout << "HTTP 上报成功: 通道 " << alert.channel_id << " 报警已上报" << std::endl;
     return true;
 }
 
@@ -204,12 +196,8 @@ void ReportService::cleanup() {
 
 // 停止 MQTT 连接（当上报被禁用时调用）
 void ReportService::stopMqttConnection() {
-    std::cout << "MQTT 停止连接..." << std::endl;
-    
     // 清理 MQTT 客户端
     cleanup();
-    
-    std::cout << "MQTT 连接已停止" << std::endl;
 }
 
 // 统一的 MQTT 客户端创建和连接方法
@@ -281,9 +269,6 @@ bool ReportService::createAndConnectMqttClient(const ReportConfig& config, std::
     lock.unlock();
     
     // 连接到 broker（异步连接，但可能进行DNS解析）
-    std::cout << "MQTT 正在连接到 " << config.mqtt_broker << ":" << config.mqtt_port 
-              << " (client_id: " << client_id << ")..." << std::endl;
-    
     // 验证 broker 地址格式（基本检查）
     if (config.mqtt_broker.empty()) {
         std::cerr << "MQTT 连接失败: broker 地址为空" << std::endl;
@@ -318,7 +303,6 @@ bool ReportService::createAndConnectMqttClient(const ReportConfig& config, std::
         return false;
     }
     
-    std::cout << "MQTT 连接请求已发送，等待连接结果..." << std::endl;
     // 不等待连接结果，立即返回（连接结果通过回调处理）
     // 这样可以避免阻塞调用线程
     return true;
@@ -342,8 +326,6 @@ struct mosquitto* ReportService::getOrCreateMqttClient(const ReportConfig& confi
         current_broker_ != config.mqtt_broker || 
         current_port_ != config.mqtt_port) {
         
-        std::cout << "MQTT 客户端需要创建或重新配置..." << std::endl;
-        
         // 创建并连接客户端
         if (!createAndConnectMqttClient(config, lock)) {
             // 创建或连接请求失败，返回 nullptr
@@ -357,7 +339,6 @@ struct mosquitto* ReportService::getOrCreateMqttClient(const ReportConfig& confi
         lock.lock();
         if (mqtt_connect_cv_.wait_for(lock, std::chrono::seconds(5), [this]{ return mqtt_connected_ || mqtt_connect_failed_; })) {
             if (mqtt_connected_) {
-                std::cout << "MQTT 客户端已连接" << std::endl;
                 return mqtt_client_;
             } else {
                 std::cerr << "MQTT 客户端连接失败" << std::endl;
@@ -430,15 +411,12 @@ bool ReportService::reportViaMqtt(const AlertRecord& alert, const ReportConfig& 
         return false;
     }
     
-    // std::cout << "MQTT 消息发布成功: topic=" << config.mqtt_topic << std::endl;
     return true;
 }
 
 
 // 上报工作线程函数
 void ReportService::reportWorker() {
-    std::cout << "上报工作线程已启动" << std::endl;
-    
     while (report_worker_running_.load()) {
         std::unique_lock<std::mutex> lock(report_queue_mutex_);
         
@@ -463,8 +441,6 @@ void ReportService::reportWorker() {
             lock.lock();
         }
     }
-    
-    std::cout << "上报工作线程已停止" << std::endl;
 }
 
 // 实际执行上报（在工作线程中调用）
@@ -475,7 +451,6 @@ void ReportService::executeReport(const AlertRecord& alert, const ReportTaskConf
     try {
         // 检查配置是否仍然启用
         if (!task_config.enabled) {
-            std::cout << "上报已禁用，跳过上报任务" << std::endl;
             return;
         }
         

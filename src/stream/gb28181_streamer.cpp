@@ -38,11 +38,6 @@ bool GB28181Streamer::initialize(const GB28181Config& config,
     }
     std::string output_url = url_stream.str();
     
-    std::cout << "GB28181: 初始化推流 " << output_url 
-              << " (格式: " << (is_ps_stream ? "PS" : "H.264") 
-              << ", 尺寸: " << width << "x" << height 
-              << ", 帧率: " << fps << ")" << std::endl;
-    
     // 分配输出格式上下文
     int ret = avformat_alloc_output_context2(&fmt_ctx, nullptr, format_name, output_url.c_str());
     if (ret < 0 || !fmt_ctx) {
@@ -173,7 +168,6 @@ bool GB28181Streamer::initialize(const GB28181Config& config,
     last_dts = -1;
     is_streaming = true;
     
-    std::cout << "GB28181: 推流初始化成功" << std::endl;
     return true;
 }
 
@@ -313,8 +307,6 @@ void GB28181Streamer::close() {
         avformat_free_context(fmt_ctx);
         fmt_ctx = nullptr;
     }
-    
-    std::cout << "GB28181: 推流已关闭" << std::endl;
 }
 
 } // namespace detector_service

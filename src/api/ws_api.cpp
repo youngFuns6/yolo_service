@@ -14,7 +14,6 @@ void setupWebSocketRoutes(crow::SimpleApp& app) {
     })
     .onclose([&ws_handler](crow::websocket::connection& conn, const std::string& reason, uint16_t status_code) {
         ws_handler.handleDisconnection(conn);
-        std::cout << "通道数据 WebSocket 连接已关闭: " << reason << " (status: " << status_code << ")" << std::endl;
     })
     .onmessage([&ws_handler](crow::websocket::connection& conn, const std::string& message, bool is_binary) {
         ws_handler.handleChannelMessage(conn, message, is_binary);
@@ -27,7 +26,6 @@ void setupWebSocketRoutes(crow::SimpleApp& app) {
     })
     .onclose([&ws_handler](crow::websocket::connection& conn, const std::string& reason, uint16_t status_code) {
         ws_handler.handleDisconnection(conn);
-        std::cout << "报警数据 WebSocket 连接已关闭: " << reason << " (status: " << status_code << ")" << std::endl;
     })
     .onmessage([&ws_handler](crow::websocket::connection& conn, const std::string& message, bool is_binary) {
         ws_handler.handleAlertMessage(conn, message, is_binary);

@@ -28,7 +28,6 @@ void WebSocketHandler::handleChannelConnection(crow::websocket::connection& conn
     info.type = ConnectionType::CHANNEL;
     info.channel_id = -1;  // 初始值，等待客户端订阅
     connections_[&conn] = info;
-    std::cout << "通道数据 WebSocket 连接已建立" << std::endl;
 }
 
 void WebSocketHandler::handleAlertConnection(crow::websocket::connection& conn) {
@@ -37,7 +36,6 @@ void WebSocketHandler::handleAlertConnection(crow::websocket::connection& conn) 
     info.type = ConnectionType::ALERT;
     info.channel_id = -1;
     connections_[&conn] = info;
-    std::cout << "报警数据 WebSocket 连接已建立" << std::endl;
 }
 
 void WebSocketHandler::handleDisconnection(crow::websocket::connection& conn) {
@@ -54,7 +52,6 @@ void WebSocketHandler::handleDisconnection(crow::websocket::connection& conn) {
         }
         connections_.erase(it);
     }
-    std::cout << "WebSocket 连接已关闭" << std::endl;
 }
 
 void WebSocketHandler::handleChannelMessage(crow::websocket::connection& conn, 
@@ -82,8 +79,6 @@ void WebSocketHandler::handleChannelMessage(crow::websocket::connection& conn,
                     // 更新订阅信息
                     it->second.channel_id = channel_id;
                     channel_subscriptions_[channel_id].insert(&conn);
-                    
-                    std::cout << "连接已订阅通道 " << channel_id << std::endl;
                     
                     // 发送确认消息
                     nlohmann::json response;

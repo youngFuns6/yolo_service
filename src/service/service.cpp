@@ -34,7 +34,6 @@ bool initializeDatabase(Config& config) {
         std::cerr << "数据库初始化失败" << std::endl;
         return false;
     }
-    std::cout << "数据库初始化成功" << std::endl;
     
     return true;
 }
@@ -58,14 +57,11 @@ InitializationResult initializeDetector(Config& config) {
     }
     
     result.success = true;
-    std::cout << "检测器初始化成功" << std::endl;
     return result;
 }
 
 
 bool initializeApplication(AppContext& context, StreamManager& stream_manager) {
-    std::cout << "启动视觉分析服务..." << std::endl;
-    
     // 初始化配置
     auto& config = Config::getInstance();
     initializeConfig(config);
@@ -187,8 +183,6 @@ void setupAllRoutes(crow::SimpleApp& app, const AppContext& context) {
 
 void startServer(crow::SimpleApp& app, const Config& config) {
     int port = config.getServerConfig().http_port;
-    std::cout << "服务器启动在端口: " << port << std::endl;
-    
     app.port(port).multithreaded().run();
 }
 
@@ -202,25 +196,16 @@ void startEnabledChannels(StreamManager* stream_manager,
     auto& channel_manager = ChannelManager::getInstance();
     auto channels = channel_manager.getAllChannels();
     
-    std::cout << "正在检查并启动已启用的通道，共 " << channels.size() << " 个通道" << std::endl;
-    
     int started_count = 0;
     for (const auto& channel : channels) {
         if (channel && channel->enabled.load()) {
-            std::cout << "发现已启用的通道: ID=" << channel->id 
-                      << ", 名称=" << channel->name 
-                      << ", URL=" << channel->source_url << std::endl;
-            
             if (stream_manager->startAnalysis(channel->id, channel, detector)) {
                 started_count++;
-                std::cout << "通道 " << channel->id << " 启动成功" << std::endl;
             } else {
                 std::cerr << "通道 " << channel->id << " 启动失败" << std::endl;
             }
         }
     }
-    
-    std::cout << "已启动 " << started_count << " 个已启用的通道" << std::endl;
 }
 
 int startService() {

@@ -67,19 +67,13 @@ void setupChannelRoutes(crow::SimpleApp& app,
             
             // 如果通道启用，自动启动拉流分析
             if (channel.enabled.load() && stream_manager && detector) {
-                std::cout << "ChannelAPI: 通道 " << channel_id << " 已启用，准备启动分析" << std::endl;
                 auto created_channel = channel_manager.getChannel(channel_id);
                 if (created_channel) {
                     // 启动拉流分析
-                    std::cout << "ChannelAPI: 启动分析模式，通道ID=" << channel_id << std::endl;
                     stream_manager->startAnalysis(channel_id, created_channel, detector);
                 } else {
                     std::cerr << "ChannelAPI: 无法获取通道 " << channel_id << " 的实例" << std::endl;
                 }
-            } else {
-                std::cout << "ChannelAPI: 通道 " << channel_id 
-                          << " 未启用(enabled=" << channel.enabled.load() 
-                          << ")或stream_manager/detector为空，不启动分析" << std::endl;
             }
             
             crow::json::wvalue response;
@@ -196,7 +190,6 @@ void setupChannelRoutes(crow::SimpleApp& app,
                 
                 // 处理拉流地址变化：如果地址变化且通道启用，需要重新启动分析
                 if (source_url_changed && new_enabled) {
-                    std::cout << "ChannelAPI: 通道 " << channel_id << " 的拉流地址已变化，重新启动分析" << std::endl;
                     // 如果通道正在运行，先停止当前分析
                     if (stream_manager->isAnalyzing(channel_id)) {
                         stream_manager->stopAnalysis(channel_id);

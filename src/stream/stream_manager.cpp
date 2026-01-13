@@ -74,7 +74,6 @@ StreamManager::StreamManager() {
 
 void StreamManager::initialize() {
     // 初始化GB28181 SIP客户端（此时数据库应该已经初始化）
-    std::cout << "StreamManager: 开始初始化GB28181 SIP客户端" << std::endl;
     initGB28181SipClient();
 }
 
@@ -133,18 +132,15 @@ StreamManager::~StreamManager() {
 
 void StreamManager::setFrameCallback(FrameCallback callback) {
     frame_callback_ = callback;
-    std::cout << "StreamManager: 帧回调函数已设置" << std::endl;
 }
 
 
 bool StreamManager::startAnalysis(int channel_id, std::shared_ptr<Channel> channel,
                                  std::shared_ptr<YOLOv11Detector> detector) {
-    std::cout << "StreamManager: 开始启动分析，通道ID=" << channel_id << std::endl;
     std::lock_guard<std::mutex> lock(streams_mutex_);
     
     // 如果已经在运行，先停止
     if (streams_.find(channel_id) != streams_.end()) {
-        std::cout << "StreamManager: 通道 " << channel_id << " 已在运行，先停止" << std::endl;
         stopAnalysis(channel_id);
     }
     
@@ -155,7 +151,6 @@ bool StreamManager::startAnalysis(int channel_id, std::shared_ptr<Channel> chann
     std::string decoded_url = decodeUrlEntities(channel->source_url);
     
     // 打开视频源 - 使用FFmpeg后端处理RTSP流
-    std::cout << "正在打开视频源进行分析: " << decoded_url << std::endl;
     context->cap.open(decoded_url, cv::CAP_FFMPEG);
     if (!context->cap.isOpened()) {
         std::cerr << "无法打开视频源: " << decoded_url << std::endl;
@@ -184,7 +179,6 @@ bool StreamManager::startAnalysis(int channel_id, std::shared_ptr<Channel> chann
     streams_[channel_id]->thread = std::thread(&StreamManager::streamWorker, this,
                                                 channel_id, channel, detector);
     
-    std::cout << "StreamManager: 分析启动成功，通道ID=" << channel_id << std::endl;
     return true;
 }
 
@@ -260,15 +254,11 @@ bool StreamManager::updateAlgorithmConfig(int channel_id, const AlgorithmConfig&
         it->second->algorithm_config = config;
     }
     
-    std::cout << "StreamManager: 通道 " << channel_id << " 的算法配置已更新" << std::endl;
     return true;
 }
 
 void StreamManager::streamWorker(int channel_id, std::shared_ptr<Channel> channel,
                                  std::shared_ptr<YOLOv11Detector> detector) {
-    std::cout << "StreamManager: 启动工作线程，通道ID=" << channel_id 
-              << ", 回调函数已设置=" << (frame_callback_ ? "是" : "否") << std::endl;
-    
     // 获取 context 引用（需要加锁）
     std::unique_lock<std::mutex> lock(streams_mutex_);
     auto it = streams_.find(channel_id);
@@ -312,9 +302,6 @@ void StreamManager::streamWorker(int channel_id, std::shared_ptr<Channel> channe
         context->gb28181_info.channel_id = channel_id;
         context->gb28181_info.channel_code = channel_code;
         context->gb28181_info.is_active = false;  // 初始状态未激活，等待上级平台请求
-        
-        std::cout << "StreamManager: 通道 " << channel_id 
-                  << " GB28181已启用，通道编码: " << channel_code << std::endl;
     }
     
     cv::Mat frame, processed_frame;
@@ -356,7 +343,6 @@ void StreamManager::streamWorker(int channel_id, std::shared_ptr<Channel> channe
             context->cap.set(cv::CAP_PROP_BUFFERSIZE, 1);  // 最小缓冲区，避免缓冲积压
             context->cap.set(cv::CAP_PROP_FPS, channel->fps);
             context->cap.set(cv::CAP_PROP_FOURCC, cv::VideoWriter::fourcc('H', '2', '6', '4'));
-            std::cout << "通道 " << channel_id << " RTSP流重连成功" << std::endl;
             consecutive_failures = 0;
             // 更新状态为running
             auto& db = Database::getInstance();
@@ -489,7 +475,6 @@ bool StreamManager::initGB28181SipClient() {
     GB28181Config config = config_mgr.getGB28181Config();
     
     if (!config.enabled.load()) {
-        std::cout << "GB28181: 未启用，跳过SIP客户端初始化" << std::endl;
         return false;
     }
     
@@ -521,14 +506,10 @@ bool StreamManager::initGB28181SipClient() {
         return false;
     }
     
-    std::cout << "GB28181 SIP: 初始化并启动成功" << std::endl;
     return true;
 }
 
 void StreamManager::handleGB28181Invite(const GB28181Session& session) {
-    std::cout << "GB28181: 收到Invite请求，通道=" << session.channel_id 
-              << ", 目标=" << session.dest_ip << ":" << session.dest_port << std::endl;
-    
     // 从通道编码中提取通道ID（简化版，假设通道编码的第14-17位是通道ID）
     int channel_id = 0;
     if (session.channel_id.length() >= 17) {
@@ -587,13 +568,9 @@ void StreamManager::handleGB28181Invite(const GB28181Session& session) {
     if (gb28181_sip_client_) {
         gb28181_sip_client_->sendInviteOk(session);
     }
-    
-    std::cout << "GB28181: 通道 " << channel_id << " 推流已启动" << std::endl;
 }
 
 void StreamManager::handleGB28181Bye(const std::string& channel_id_str) {
-    std::cout << "GB28181: 收到Bye请求，通道=" << channel_id_str << std::endl;
-    
     // 从通道编码中提取通道ID
     int channel_id = 0;
     if (channel_id_str.length() >= 17) {
@@ -621,8 +598,6 @@ void StreamManager::handleGB28181Bye(const std::string& channel_id_str) {
     
     // 标记通道为非活跃
     context->gb28181_info.is_active = false;
-    
-    std::cout << "GB28181: 通道 " << channel_id << " 推流已停止" << std::endl;
 }
 
 } // namespace detector_service

@@ -124,9 +124,7 @@ void setupReportConfigRoutes(crow::SimpleApp& app) {
             
             // 如果配置被启用且是 MQTT 类型，MQTT 连接将在上报时自动创建
             if (enabled_changed && new_enabled && config.type == ReportType::MQTT) {
-                if (!config.mqtt_broker.empty() && !config.mqtt_topic.empty()) {
-                    std::cout << "上报已启用，MQTT 连接将在首次上报时自动创建" << std::endl;
-                } else {
+                if (config.mqtt_broker.empty() || config.mqtt_topic.empty()) {
                     std::cerr << "MQTT 配置不完整: broker=" << config.mqtt_broker 
                               << ", topic=" << config.mqtt_topic << std::endl;
                 }
