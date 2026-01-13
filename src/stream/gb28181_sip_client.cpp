@@ -1,6 +1,8 @@
 #include "gb28181_sip_client.h"
 #include <eXosip2/eXosip.h>
 #include <osip2/osip.h>
+#include <sys/socket.h>
+#include <netinet/in.h>
 #include <iostream>
 #include <sstream>
 #include <iomanip>
