@@ -75,6 +75,9 @@ bool initializeApplication(AppContext& context, StreamManager& stream_manager) {
         return false;
     }
     
+    // 初始化 StreamManager（数据库已初始化，可以加载配置）
+    stream_manager.initialize();
+    
     // 初始化检测器
     auto result = initializeDetector(config);
     if (!result.success) {
@@ -221,13 +224,15 @@ void startEnabledChannels(StreamManager* stream_manager,
 }
 
 int startService() {
-    StreamManager stream_manager;
-    
-    // 初始化应用
+    // 先初始化应用（包括数据库）
     AppContext context;
+    StreamManager stream_manager;
     if (!initializeApplication(context, stream_manager)) {
         return 1;
     }
+    
+    // 注意：StreamManager 在 initializeApplication 之后创建，
+    // 这样数据库已经初始化，可以正确加载 GB28181 配置
     
     // 设置帧回调函数
     stream_manager.setFrameCallback(processFrameCallback);

@@ -34,6 +34,9 @@ public:
     StreamManager();
     ~StreamManager();
     
+    // 初始化（在数据库初始化后调用）
+    void initialize();
+    
     // 启动/停止拉流分析
     bool startAnalysis(int channel_id, std::shared_ptr<Channel> channel,
                       std::shared_ptr<YOLOv11Detector> detector);

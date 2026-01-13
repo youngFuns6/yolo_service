@@ -1,0 +1,21 @@
+services:
+  # GB28181 SIP服务器和流媒体服务器
+  # 使用SRS GB28181版本作为测试服务器
+  srs-gb28181:
+    image: 7040210/gb28181:latest
+    container_name: gb28181-srs
+    platform: linux/amd64  # 指定平台以兼容ARM64 Mac
+    ports:
+      - "1986:1985"        # HTTP API端口（改为1986避免冲突）
+      - "1936:1935"        # RTMP端口（改为1936避免冲突）
+      - "8081:8080"        # HTTP端口（改为8081避免冲突）
+      - "5062:5060/udp"    # SIP端口（改为5062避免冲突）
+      - "30100-30200:30000-30100/udp"  # RTP端口范围（改为30100-30200避免冲突）
+    environment:
+      - TZ=Asia/Shanghai
+    volumes:
+      - ./gb28181-test-data/srs:/usr/local/srs/conf
+      - ./gb28181-test-data/srs/html:/usr/local/srs/objs/nginx/html
+    command: ["./objs/srs", "-c", "conf/srs.conf"]
+    restart: unless-stopped
+    network_mode: "bridge"

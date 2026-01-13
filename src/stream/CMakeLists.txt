@@ -58,10 +58,14 @@ endif()
 
 # 链接eXosip2库（由主CMakeLists.txt的FindExosip2模块处理）
 if(EXOSIP2_FOUND)
+    # 设置包含目录
+    if(EXOSIP2_INCLUDE_DIRS)
+        target_include_directories(stream PUBLIC ${EXOSIP2_INCLUDE_DIRS})
+    endif()
+    
     if(TARGET exosip2::exosip2)
         # 使用导入目标（从源码编译）
         message(STATUS "Linking eXosip2 from source build")
-        target_include_directories(stream PUBLIC ${EXOSIP2_INCLUDE_DIRS})
         
         # 直接链接库文件路径（确保依赖关系）
         if(TARGET exosip2 AND TARGET osip2)
@@ -92,8 +96,11 @@ if(EXOSIP2_FOUND)
     else()
         # 使用系统安装的库
         message(STATUS "Linking eXosip2 from system")
-        target_include_directories(stream PUBLIC ${EXOSIP2_INCLUDE_DIRS})
         target_link_libraries(stream PUBLIC ${EXOSIP2_LIBRARIES})
+    endif()
+    # macOS 需要链接 libresolv 用于 DNS 解析（eXosip2 需要）
+    if(APPLE AND EXOSIP2_FOUND)
+        target_link_libraries(stream PUBLIC resolv)
     endif()
 else()
     message(WARNING "eXosip2 not found, GB28181 SIP signaling will not work")

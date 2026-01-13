@@ -79,6 +79,7 @@ bool GB28181SipClient::start() {
     // 启动事件处理线程
     running = true;
     event_thread = std::thread(&GB28181SipClient::eventLoop, this);
+    std::cout << "GB28181 SIP: 事件处理线程已启动" << std::endl;
     
     // 启动心跳线程
     heartbeat_thread = std::thread([this]() {
@@ -94,6 +95,9 @@ bool GB28181SipClient::start() {
             std::this_thread::sleep_for(std::chrono::seconds(1));
         }
     });
+    
+    // 给线程一些时间启动
+    std::this_thread::sleep_for(std::chrono::milliseconds(100));
     
     // 注册到SIP服务器
     if (!doRegister()) {
@@ -137,10 +141,17 @@ void GB28181SipClient::stop() {
 }
 
 void GB28181SipClient::eventLoop() {
+    std::cout << "GB28181 SIP: eventLoop 线程开始运行" << std::endl;
+    int loop_count = 0;
     while (running.load()) {
         handleEvent();
+        loop_count++;
+        if (loop_count % 200 == 0) {  // 每10秒打印一次（200 * 50ms = 10秒）
+            std::cout << "GB28181 SIP: eventLoop 运行中，已处理 " << loop_count << " 次循环" << std::endl;
+        }
         std::this_thread::sleep_for(std::chrono::milliseconds(50));
     }
+    std::cout << "GB28181 SIP: eventLoop 线程退出" << std::endl;
 }
 
 void GB28181SipClient::handleEvent() {

@@ -68,7 +68,13 @@ std::string avErrorToString(int errnum) {
 }
 
 StreamManager::StreamManager() {
-    // 初始化GB28181 SIP客户端
+    // 注意：GB28181 SIP客户端初始化延迟到 initialize() 方法中
+    // 因为需要等待数据库初始化完成
+}
+
+void StreamManager::initialize() {
+    // 初始化GB28181 SIP客户端（此时数据库应该已经初始化）
+    std::cout << "StreamManager: 开始初始化GB28181 SIP客户端" << std::endl;
     initGB28181SipClient();
 }
 

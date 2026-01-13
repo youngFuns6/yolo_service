@@ -913,8 +913,9 @@ bool Database::loadGB28181Config(GB28181Config& config) {
         return false;
     }
     
-    if (sqlite3_step(stmt) == SQLITE_ROW) {
-        config.enabled = sqlite3_column_int(stmt, 0) != 0;
+    rc = sqlite3_step(stmt);
+    if (rc == SQLITE_ROW) {
+        config.enabled.store(sqlite3_column_int(stmt, 0) != 0);
         
         const char* sip_server_ip = reinterpret_cast<const char*>(sqlite3_column_text(stmt, 1));
         config.sip_server_ip = sip_server_ip ? sip_server_ip : "";
