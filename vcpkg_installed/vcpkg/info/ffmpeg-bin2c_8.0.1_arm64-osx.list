@@ -1,9 +1,0 @@
-arm64-osx/
-arm64-osx/manual-tools/
-arm64-osx/manual-tools/ffmpeg-bin2c/
-arm64-osx/manual-tools/ffmpeg-bin2c/bin2c
-arm64-osx/share/
-arm64-osx/share/ffmpeg-bin2c/
-arm64-osx/share/ffmpeg-bin2c/copyright
-arm64-osx/share/ffmpeg-bin2c/vcpkg.spdx.json
-arm64-osx/share/ffmpeg-bin2c/vcpkg_abi_info.txt
