@@ -1,0 +1,5 @@
+arm64-osx/
+arm64-osx/share/
+arm64-osx/share/pthreads/
+arm64-osx/share/pthreads/vcpkg.spdx.json
+arm64-osx/share/pthreads/vcpkg_abi_info.txt

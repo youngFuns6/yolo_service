@@ -23,6 +23,14 @@ target_link_libraries(${PROJECT_NAME}
     service
 )
 
+# macOS 上需要链接 Security framework（用于 eXosip2）
+if(APPLE)
+    find_library(SECURITY_FRAMEWORK Security)
+    if(SECURITY_FRAMEWORK)
+        target_link_libraries(${PROJECT_NAME} PRIVATE ${SECURITY_FRAMEWORK})
+    endif()
+endif()
+
 # 确保 eXosip2 ExternalProject 先构建（如果从源码编译）
 if(TARGET exosip2_libs_ready)
     add_dependencies(${PROJECT_NAME} exosip2_libs_ready)

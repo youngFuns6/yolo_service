@@ -5,6 +5,7 @@
 #include <numeric>
 #include <cmath>
 #include <limits>
+#include <unordered_map>
 
 namespace detector_service {
 
@@ -12,12 +13,16 @@ YOLOv11Detector::YOLOv11Detector(const std::string& model_path,
                                  float conf_threshold,
                                  float nms_threshold,
                                  int input_width,
-                                 int input_height)
+                                 int input_height,
+                                 ExecutionProvider execution_provider,
+                                 int device_id)
     : model_path_(model_path),
       conf_threshold_(conf_threshold),
       nms_threshold_(nms_threshold),
       input_width_(input_width),
       input_height_(input_height),
+      execution_provider_(execution_provider),
+      device_id_(device_id),
       env_(OnnxEnvSingleton::getInstance()) {  // 使用单例，确保整个程序只有一个Ort::Env实例
 }
 
@@ -29,6 +34,9 @@ bool YOLOv11Detector::initialize() {
         session_options_.SetIntraOpNumThreads(1);
         session_options_.SetGraphOptimizationLevel(GraphOptimizationLevel::ORT_ENABLE_EXTENDED);
         
+        // 配置执行提供者
+        configureExecutionProvider();
+        
         if (!loadModel()) {
             return false;
         }
@@ -38,6 +46,139 @@ bool YOLOv11Detector::initialize() {
     } catch (const std::exception& e) {
         std::cerr << "初始化检测器失败: " << e.what() << std::endl;
         return false;
+    }
+}
+
+void YOLOv11Detector::configureExecutionProvider() {
+    ExecutionProvider provider = execution_provider_;
+    
+    // 如果是 AUTO，自动选择最佳执行提供者
+    if (provider == ExecutionProvider::AUTO) {
+        provider = selectExecutionProvider();
+        execution_provider_ = provider;  // 更新为实际选择的提供者
+    }
+    
+    try {
+        switch (provider) {
+            case ExecutionProvider::CUDA: {
+                OrtCUDAProviderOptions cuda_options{};
+                cuda_options.device_id = device_id_;
+                cuda_options.arena_extend_strategy = 0;  // kNextPowerOfTwo
+                cuda_options.gpu_mem_limit = 2 * 1024 * 1024 * 1024;  // 2GB
+                cuda_options.cudnn_conv_algo_search = OrtCudnnConvAlgoSearchExhaustive;
+                cuda_options.do_copy_in_default_stream = 1;
+                cuda_options.has_user_compute_stream = 0;
+                cuda_options.default_memory_arena_cfg = nullptr;
+                session_options_.AppendExecutionProvider_CUDA(cuda_options);
+                std::cout << "[检测器] 使用 CUDA 执行提供者 (设备 ID: " << device_id_ << ")" << std::endl;
+                break;
+            }
+            case ExecutionProvider::CoreML: {
+                #ifdef __APPLE__
+                // CoreML 在 macOS 上可用
+                // 使用 AppendExecutionProvider 方法添加 CoreML 执行提供者
+                session_options_.AppendExecutionProvider("CoreMLExecutionProvider");
+                std::cout << "[检测器] 使用 CoreML 执行提供者" << std::endl;
+                #else
+                std::cerr << "[检测器] 警告: CoreML 仅在 macOS 上可用，回退到 CPU" << std::endl;
+                #endif
+                break;
+            }
+            case ExecutionProvider::TensorRT: {
+                OrtTensorRTProviderOptions trt_options{};
+                trt_options.device_id = device_id_;
+                trt_options.has_user_compute_stream = 0;
+                trt_options.trt_max_partition_iterations = 1000;
+                trt_options.trt_min_subgraph_size = 1;
+                trt_options.trt_max_workspace_size = 2 * 1024 * 1024 * 1024;  // 2GB
+                trt_options.trt_fp16_enable = 0;  // 可以根据需要启用 FP16
+                trt_options.trt_int8_enable = 0;
+                trt_options.trt_int8_calibration_table_name = "";
+                trt_options.trt_int8_use_native_calibration_table = 0;
+                trt_options.trt_dla_enable = 0;
+                trt_options.trt_dla_core = 0;
+                trt_options.trt_dump_subgraphs = 0;
+                trt_options.trt_engine_cache_enable = 0;
+                trt_options.trt_engine_cache_path = "";
+                trt_options.trt_engine_decryption_enable = 0;
+                trt_options.trt_engine_decryption_lib_path = "";
+                trt_options.trt_force_sequential_engine_build = 0;
+                session_options_.AppendExecutionProvider_TensorRT(trt_options);
+                std::cout << "[检测器] 使用 TensorRT 执行提供者 (设备 ID: " << device_id_ << ")" << std::endl;
+                break;
+            }
+            case ExecutionProvider::ROCM: {
+                OrtROCMProviderOptions rocm_options{};
+                rocm_options.device_id = device_id_;
+                rocm_options.miopen_conv_exhaustive_search = 0;
+                rocm_options.do_copy_in_default_stream = 1;
+                session_options_.AppendExecutionProvider_ROCM(rocm_options);
+                std::cout << "[检测器] 使用 ROCm 执行提供者 (设备 ID: " << device_id_ << ")" << std::endl;
+                break;
+            }
+            case ExecutionProvider::CPU:
+            default:
+                std::cout << "[检测器] 使用 CPU 执行提供者" << std::endl;
+                break;
+        }
+    } catch (const std::exception& e) {
+        std::cerr << "[检测器] 配置执行提供者失败: " << e.what() 
+                  << "，回退到 CPU" << std::endl;
+        // 发生错误时回退到 CPU
+    }
+}
+
+ExecutionProvider YOLOv11Detector::selectExecutionProvider() {
+    // 获取可用的执行提供者
+    std::vector<std::string> available_providers = getAvailableProviders();
+    
+    std::cout << "[检测器] 可用的执行提供者: ";
+    for (const auto& provider : available_providers) {
+        std::cout << provider << " ";
+    }
+    std::cout << std::endl;
+    
+    // 按优先级选择：CoreML (macOS) > CUDA > TensorRT > ROCm > CPU
+    #ifdef __APPLE__
+    for (const auto& provider : available_providers) {
+        if (provider == "CoreMLExecutionProvider") {
+            std::cout << "[检测器] 自动选择: CoreML" << std::endl;
+            return ExecutionProvider::CoreML;
+        }
+    }
+    #endif
+    
+    for (const auto& provider : available_providers) {
+        if (provider == "CUDAExecutionProvider") {
+            std::cout << "[检测器] 自动选择: CUDA" << std::endl;
+            return ExecutionProvider::CUDA;
+        }
+    }
+    
+    for (const auto& provider : available_providers) {
+        if (provider == "TensorrtExecutionProvider") {
+            std::cout << "[检测器] 自动选择: TensorRT" << std::endl;
+            return ExecutionProvider::TensorRT;
+        }
+    }
+    
+    for (const auto& provider : available_providers) {
+        if (provider == "ROCMExecutionProvider") {
+            std::cout << "[检测器] 自动选择: ROCm" << std::endl;
+            return ExecutionProvider::ROCM;
+        }
+    }
+    
+    std::cout << "[检测器] 自动选择: CPU" << std::endl;
+    return ExecutionProvider::CPU;
+}
+
+std::vector<std::string> YOLOv11Detector::getAvailableProviders() {
+    try {
+        return Ort::GetAvailableProviders();
+    } catch (const std::exception& e) {
+        std::cerr << "[检测器] 获取可用执行提供者失败: " << e.what() << std::endl;
+        return {"CPUExecutionProvider"};  // 至少返回 CPU
     }
 }
 

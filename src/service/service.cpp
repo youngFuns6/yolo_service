@@ -41,18 +41,21 @@ bool initializeDatabase(Config& config) {
 InitializationResult initializeDetector(Config& config) {
     InitializationResult result;
     
+    const auto& detector_config = config.getDetectorConfig();
     result.detector = std::make_shared<YOLOv11Detector>(
-        config.getDetectorConfig().model_path,
-        config.getDetectorConfig().conf_threshold,
-        config.getDetectorConfig().nms_threshold,
-        config.getDetectorConfig().input_width,
-        config.getDetectorConfig().input_height
+        detector_config.model_path,
+        detector_config.conf_threshold,
+        detector_config.nms_threshold,
+        detector_config.input_width,
+        detector_config.input_height,
+        detector_config.execution_provider,
+        detector_config.device_id
     );
     
     if (!result.detector->initialize()) {
         result.success = false;
         result.error_message = "检测器初始化失败，请确保模型文件存在: " + 
-                              config.getDetectorConfig().model_path;
+                              detector_config.model_path;
         return result;
     }
     

@@ -5,12 +5,24 @@
 
 namespace detector_service {
 
+// 执行提供者类型
+enum class ExecutionProvider {
+    CPU,        // CPU 执行提供者（默认）
+    CUDA,       // NVIDIA CUDA GPU
+    CoreML,     // Apple CoreML (macOS/iOS)
+    TensorRT,   // NVIDIA TensorRT GPU 优化
+    ROCM,       // AMD ROCm GPU
+    AUTO        // 自动选择（优先 GPU，回退到 CPU）
+};
+
 struct DetectorConfig {
     std::string model_path;
     float conf_threshold = 0.65f;
     float nms_threshold = 0.45f;
     int input_width = 640;
     int input_height = 640;
+    ExecutionProvider execution_provider = ExecutionProvider::AUTO;  // 执行提供者，默认为自动选择
+    int device_id = 0;  // GPU 设备 ID（仅对 CUDA/TensorRT/ROCM 有效）
 };
 
 struct DatabaseConfig {
@@ -19,7 +31,7 @@ struct DatabaseConfig {
 };
 
 struct ServerConfig {
-    int http_port = 8081;
+    int http_port = 9090;
     std::string ws_path = "/ws";
     int max_connections = 100;
 };

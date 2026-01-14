@@ -66,13 +66,13 @@ except:
             if [ -n "$stream_path" ]; then
                 echo ""
                 echo "流: $stream_path"
-                echo "  HTTP-FLV: http://localhost:8081/$stream_path.flv"
-                echo "  HLS:      http://localhost:8081/$stream_path.m3u8"
+                echo "  HTTP-FLV: http://localhost:9090/$stream_path.flv"
+                echo "  HLS:      http://localhost:9090/$stream_path.m3u8"
                 echo "  RTMP:     rtmp://localhost:1936/$stream_path"
                 echo ""
                 echo "  测试播放:"
                 echo "    VLC: 打开网络流 -> $stream_path.flv"
-                echo "    浏览器: http://localhost:8081/player.html?stream=$stream_path"
+                echo "    浏览器: http://localhost:9090/player.html?stream=$stream_path"
             fi
         done <<< "$STREAM_NAMES"
     fi

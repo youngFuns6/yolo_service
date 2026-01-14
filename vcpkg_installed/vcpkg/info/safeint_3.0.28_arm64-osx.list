@@ -1,0 +1,8 @@
+arm64-osx/
+arm64-osx/include/
+arm64-osx/include/SafeInt.hpp
+arm64-osx/share/
+arm64-osx/share/safeint/
+arm64-osx/share/safeint/copyright
+arm64-osx/share/safeint/vcpkg.spdx.json
+arm64-osx/share/safeint/vcpkg_abi_info.txt

@@ -1,0 +1,8 @@
+arm64-osx/
+arm64-osx/share/
+arm64-osx/share/vcpkg-pkgconfig-get-modules/
+arm64-osx/share/vcpkg-pkgconfig-get-modules/copyright
+arm64-osx/share/vcpkg-pkgconfig-get-modules/vcpkg-port-config.cmake
+arm64-osx/share/vcpkg-pkgconfig-get-modules/vcpkg.spdx.json
+arm64-osx/share/vcpkg-pkgconfig-get-modules/vcpkg_abi_info.txt
+arm64-osx/share/vcpkg-pkgconfig-get-modules/x_vcpkg_pkgconfig_get_modules.cmake

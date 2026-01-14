@@ -12,6 +12,7 @@ target_include_directories(detector PUBLIC
 target_link_libraries(detector PUBLIC
     ${OpenCV_LIBS}
     onnxruntime::onnxruntime
+    config
     utils
     models
 )

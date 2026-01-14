@@ -94,7 +94,7 @@ cmake --build .
 ./bin/detector_service
 ```
 
-服务将在 `http://localhost:8081` 启动。
+服务将在 `http://localhost:9090` 启动。
 
 ### 3. API 接口
 
@@ -137,7 +137,7 @@ cmake --build .
 
 ### 4. WebSocket 连接
 
-连接到 `ws://localhost:8081/ws` 以接收：
+连接到 `ws://localhost:9090/ws` 以接收：
 
 - **报警信息**：JSON 格式，包含检测结果和图片
 - **图片帧**：实时传输分析后的视频帧

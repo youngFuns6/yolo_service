@@ -25,7 +25,7 @@ docker logs -f gb28181-srs
 
 ### 3. 访问测试页面
 
-打开浏览器访问：http://localhost:8081
+打开浏览器访问：http://localhost:9090
 
 ## SRS 服务器配置
 
@@ -45,7 +45,7 @@ docker logs -f gb28181-srs
 | SIP | 5060 | 5062 | GB28181 SIP 协议 |
 | HTTP API | 1985 | 1986 | SRS API 接口 |
 | RTMP | 1935 | 1936 | RTMP 推流 |
-| HTTP | 8081 | 8081 | HTTP 播放和测试页面 |
+| HTTP | 9090 | 9090 | HTTP 播放和测试页面 |
 | RTP | 30000-30100 | 30100-30200 | RTP 媒体流 |
 
 ## 客户端配置示例
@@ -150,7 +150,7 @@ docker logs -f gb28181-srs
 
 #### 方法二：使用 Web 播放器
 
-打开浏览器访问：http://localhost:8081/player.html
+打开浏览器访问：http://localhost:9090/player.html
 
 播放器功能：
 - 自动加载当前活跃的流列表
@@ -165,13 +165,13 @@ docker logs -f gb28181-srs
 **HTTP-FLV 播放：**
 ```
 打开 VLC -> 媒体 -> 打开网络串流
-输入：http://localhost:8081/live/34020000001320000001.flv
+输入：http://localhost:9090/live/34020000001320000001.flv
 ```
 
 **HLS 播放：**
 ```
 打开 VLC -> 媒体 -> 打开网络串流
-输入：http://localhost:8081/live/34020000001320000001.m3u8
+输入：http://localhost:9090/live/34020000001320000001.m3u8
 ```
 
 **RTMP 播放：**

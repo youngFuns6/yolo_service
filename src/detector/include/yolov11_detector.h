@@ -8,6 +8,7 @@
 #include "image_utils.h"
 #include "algorithm_config.h"
 #include "onnx_env_singleton.h"
+#include "config.h"
 
 namespace detector_service {
 
@@ -17,7 +18,9 @@ public:
                     float conf_threshold = 0.5f,
                     float nms_threshold = 0.4f,
                     int input_width = 640,
-                    int input_height = 640);
+                    int input_height = 640,
+                    ExecutionProvider execution_provider = ExecutionProvider::AUTO,
+                    int device_id = 0);
     
     ~YOLOv11Detector();
     
@@ -41,6 +44,12 @@ public:
     
     // 获取类别名称列表
     const std::vector<std::string>& getClassNames() const { return class_names_; }
+    
+    // 获取当前使用的执行提供者
+    ExecutionProvider getExecutionProvider() const { return execution_provider_; }
+    
+    // 获取可用的执行提供者列表
+    static std::vector<std::string> getAvailableProviders();
 
 private:
     std::string model_path_;
@@ -48,6 +57,8 @@ private:
     float nms_threshold_;
     int input_width_;
     int input_height_;
+    ExecutionProvider execution_provider_;
+    int device_id_;
     
     Ort::Env& env_;  // 使用单例引用，避免重复创建导致schema注册错误
     Ort::SessionOptions session_options_;
@@ -61,6 +72,8 @@ private:
     std::vector<std::string> class_names_;
     
     bool loadModel();
+    void configureExecutionProvider();  // 配置执行提供者
+    ExecutionProvider selectExecutionProvider();  // 自动选择执行提供者
     cv::Mat preprocess(const cv::Mat& image, float& scale, int& pad_x, int& pad_y);
     std::vector<Detection> postprocess(const std::vector<float>& output, 
                                       const cv::Size& original_size,
