@@ -18,7 +18,7 @@ YOLOv11Detector::YOLOv11Detector(const std::string& model_path,
       nms_threshold_(nms_threshold),
       input_width_(input_width),
       input_height_(input_height),
-      env_(ORT_LOGGING_LEVEL_WARNING, "YOLOv11Detector") {
+      env_(OnnxEnvSingleton::getInstance()) {  // 使用单例，确保整个程序只有一个Ort::Env实例
 }
 
 YOLOv11Detector::~YOLOv11Detector() {

@@ -7,6 +7,7 @@
 #include <memory>
 #include "image_utils.h"
 #include "algorithm_config.h"
+#include "onnx_env_singleton.h"
 
 namespace detector_service {
 
@@ -48,7 +49,7 @@ private:
     int input_width_;
     int input_height_;
     
-    Ort::Env env_;
+    Ort::Env& env_;  // 使用单例引用，避免重复创建导致schema注册错误
     Ort::SessionOptions session_options_;
     std::unique_ptr<Ort::Session> session_;
     

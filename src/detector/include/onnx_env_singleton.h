@@ -14,17 +14,12 @@ class OnnxEnvSingleton {
 public:
     /**
      * @brief 获取单例实例
+     * 使用函数内静态变量确保线程安全的单例初始化
      */
     static Ort::Env& getInstance() {
-        static std::once_flag once_flag;
-        std::call_once(once_flag, []() {
-            instance_ = std::make_unique<Ort::Env>(ORT_LOGGING_LEVEL_WARNING, "YOLOv11Detector");
-        });
-        return *instance_;
+        static Ort::Env instance(ORT_LOGGING_LEVEL_WARNING, "YOLOv11Detector");
+        return instance;
     }
-
-private:
-    static std::unique_ptr<Ort::Env> instance_;
 };
 
 } // namespace detector_service

@@ -24,7 +24,6 @@ CUSTOM_TRIPLET=""
 CLEAN=false
 JOBS=$(nproc 2>/dev/null || echo 4)
 NO_PROXY=false
-TARGET_SYSROOT=""
 
 # 显示帮助信息
 show_help() {
@@ -39,7 +38,6 @@ show_help() {
     -t, --type TYPE              构建类型 (Debug|Release|RelWithDebInfo) [默认: Release]
     -c, --clean                  清理构建目录
     -j, --jobs N                 并行编译任务数 [默认: CPU核心数]
-    --sysroot PATH               目标系统 sysroot 路径（用于交叉编译兼容性）
     --no-proxy                   禁用代理（用于 vcpkg 下载）
     -h, --help                   显示此帮助信息
 
@@ -54,12 +52,7 @@ show_help() {
     $0                          # Linux x64 Release
     $0 -p windows -a x64        # Windows x64 Release
     $0 -p linux -a arm64 -t Debug  # Linux ARM64 Debug
-    $0 -p linux -a arm64 --sysroot /path/to/sysroot  # 使用目标系统 sysroot
     $0 -c                       # 清理构建目录
-
-GLIBC 兼容性:
-    如果目标系统的 GLIBC 版本较旧，请使用 --sysroot 指定目标系统的 sysroot。
-    详见 GLIBC_COMPATIBILITY.md 文档。
 EOF
 }
 
@@ -85,10 +78,6 @@ parse_args() {
                 ;;
             -j|--jobs)
                 JOBS="$2"
-                shift 2
-                ;;
-            --sysroot)
-                TARGET_SYSROOT="$2"
                 shift 2
                 ;;
             --no-proxy)
@@ -303,6 +292,22 @@ check_vcpkg() {
     echo -e "${GREEN}使用 vcpkg: $VCPKG_ROOT${NC}"
 }
 
+# 检查 vcpkg 包安装状态（可选，用于信息提示）
+check_vcpkg_packages() {
+    if [ -f "$SCRIPT_DIR/vcpkg.json" ] && [ -n "$VCPKG_ROOT" ] && [ -f "$VCPKG_ROOT/vcpkg" ]; then
+        echo -e "${BLUE}检查 vcpkg 包安装状态...${NC}"
+        # 尝试列出已安装的包（如果 vcpkg 支持）
+        if "$VCPKG_ROOT/vcpkg" list --triplet "$VCPKG_TRIPLET" >/dev/null 2>&1; then
+            INSTALLED_COUNT=$("$VCPKG_ROOT/vcpkg" list --triplet "$VCPKG_TRIPLET" 2>/dev/null | wc -l)
+            if [ "$INSTALLED_COUNT" -gt 0 ]; then
+                echo -e "${GREEN}已安装 $INSTALLED_COUNT 个包（triplet: $VCPKG_TRIPLET）${NC}"
+            else
+                echo -e "${YELLOW}未检测到已安装的包，vcpkg 将在 CMake 配置时自动安装${NC}"
+            fi
+        fi
+    fi
+}
+
 # 清理构建目录
 clean_build() {
     echo -e "${BLUE}清理构建目录...${NC}"
@@ -476,25 +481,11 @@ configure_cmake() {
                         -DCMAKE_FIND_ROOT_PATH_MODE_INCLUDE=BOTH
                         -DCMAKE_FIND_ROOT_PATH_MODE_PACKAGE=BOTH
                     )
-                    # 如果指定了目标 sysroot，优先使用它（用于兼容目标系统的 GLIBC 版本）
-                    if [ -n "$TARGET_SYSROOT" ] && [ -d "$TARGET_SYSROOT" ]; then
-                        CMAKE_ARGS+=(-DCMAKE_SYSROOT="$TARGET_SYSROOT")
-                        echo -e "${BLUE}使用指定的目标 sysroot: $TARGET_SYSROOT${NC}"
-                    # 如果找到了工具链的 sysroot，设置它以便查找系统库
-                    elif [ -n "$SYSROOT" ] && [ -d "$SYSROOT" ]; then
+                    # 如果找到了 sysroot，设置它以便查找系统库
+                    if [ -n "$SYSROOT" ] && [ -d "$SYSROOT" ]; then
                         CMAKE_ARGS+=(-DCMAKE_SYSROOT="$SYSROOT")
-                        echo -e "${BLUE}使用工具链 sysroot: $SYSROOT${NC}"
-                        echo -e "${YELLOW}注意: 如果目标系统 GLIBC 版本较旧，请使用 --sysroot 指定目标系统的 sysroot${NC}"
-                    else
-                        echo -e "${YELLOW}警告: 未找到 sysroot，二进制可能不兼容目标系统的 GLIBC 版本${NC}"
-                        echo -e "${YELLOW}建议: 使用 --sysroot 指定目标系统的 sysroot 路径${NC}"
+                        echo -e "${BLUE}使用 sysroot: $SYSROOT${NC}"
                     fi
-                    
-                    # 添加链接器标志以确保兼容性
-                    CMAKE_ARGS+=(
-                        -DCMAKE_EXE_LINKER_FLAGS="-Wl,--hash-style=both -Wl,--as-needed"
-                        -DCMAKE_SHARED_LINKER_FLAGS="-Wl,--hash-style=both -Wl,--as-needed"
-                    )
                     # 添加 ARM64 系统库路径到库搜索路径和查找根路径
                     if [ -n "$ARM64_LIB_PATH" ] && [ -d "$ARM64_LIB_PATH" ]; then
                         # 设置库路径环境变量，确保 CMake 和链接器能找到系统库
@@ -569,14 +560,33 @@ configure_cmake() {
             ;;
     esac
     
-    # 运行 CMake 配置
+    # 检查 vcpkg 包是否已安装（可选，用于提前了解状态）
+    if [ -f "../../vcpkg.json" ]; then
+        echo -e "${BLUE}检测到 vcpkg.json，vcpkg 将在 CMake 配置时自动安装依赖包${NC}"
+        echo -e "${YELLOW}注意: 在 ARM64 平台上，某些大型包（如 ffmpeg、opencv4）可能需要较长时间编译${NC}"
+        echo -e "${YELLOW}这可能需要数小时，请耐心等待...${NC}"
+        echo ""
+        echo -e "${BLUE}提示: 如果想查看 vcpkg 安装进度，可以在另一个终端运行:${NC}"
+        echo -e "${GREEN}  tail -f ${BUILD_DIR}/vcpkg-manifest-install.log${NC}"
+        echo ""
+    fi
+    
+    # 运行 CMake 配置（添加详细输出）
     echo -e "${BLUE}运行 CMake 配置命令...${NC}"
-    if ! cmake ../.. "${CMAKE_ARGS[@]}"; then
+    echo -e "${BLUE}（vcpkg 正在安装依赖包，这可能需要较长时间，请耐心等待）${NC}"
+    
+    # 设置 vcpkg 详细输出环境变量
+    export VCPKG_FEATURE_FLAGS=manifests
+    export VCPKG_VERBOSE=ON
+    
+    # 运行 CMake，并将输出同时显示和保存到日志
+    if ! cmake ../.. "${CMAKE_ARGS[@]}" 2>&1 | tee cmake_config.log; then
         echo -e "${RED}错误: CMake 配置失败${NC}"
         echo -e "${YELLOW}可能的原因:${NC}"
-        echo -e "${BLUE}  1. vcpkg 依赖包下载失败（网络问题）${NC}"
+        echo -e "${BLUE}  1. vcpkg 依赖包下载/编译失败（网络问题或编译错误）${NC}"
         echo -e "${BLUE}  2. 编译器未正确设置${NC}"
         echo -e "${BLUE}  3. 缺少必要的构建工具${NC}"
+        echo -e "${BLUE}  4. 内存不足（某些包编译需要大量内存）${NC}"
         echo ""
         echo -e "${YELLOW}建议:${NC}"
         echo -e "${BLUE}  - 检查网络连接，重试构建${NC}"
@@ -586,7 +596,13 @@ configure_cmake() {
         else
             echo -e "${BLUE}  - 如果使用代理，检查 HTTP_PROXY 和 HTTPS_PROXY 环境变量${NC}"
         fi
-        echo -e "${BLUE}  - 查看详细日志: ${BUILD_DIR}/vcpkg-manifest-install.log${NC}"
+        echo -e "${BLUE}  - 查看详细日志:${NC}"
+        echo -e "${BLUE}    - CMake 配置日志: ${BUILD_DIR}/cmake_config.log${NC}"
+        if [ -f "${BUILD_DIR}/vcpkg-manifest-install.log" ]; then
+            echo -e "${BLUE}    - vcpkg 安装日志: ${BUILD_DIR}/vcpkg-manifest-install.log${NC}"
+        fi
+        echo -e "${BLUE}  - 如果 vcpkg 安装卡住，可以尝试手动安装依赖:${NC}"
+        echo -e "${GREEN}    cd $VCPKG_ROOT && ./vcpkg install --triplet ${VCPKG_TRIPLET} --x-manifest-root=../../${NC}"
         cd ../..
         exit 1
     fi
@@ -654,6 +670,7 @@ main() {
     check_proxy
     check_vcpkg
     determine_triplet
+    check_vcpkg_packages
     create_build_dir
     configure_cmake
     build_project
