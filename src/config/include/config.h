@@ -19,7 +19,7 @@ struct DatabaseConfig {
 };
 
 struct ServerConfig {
-    int http_port = 8080;
+    int http_port = 8081;
     std::string ws_path = "/ws";
     int max_connections = 100;
 };

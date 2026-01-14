@@ -9,6 +9,7 @@
     "onnxruntime",
     "nlohmann-json",
     "mosquitto",
+    "openssl",
     {
       "name": "ffmpeg",
       "features": [
@@ -17,8 +18,20 @@
     },
     {
       "name": "opencv4",
+      "default-features": false,
       "features": [
-        "ffmpeg"
+        "calib3d",
+        "dnn",
+        "ffmpeg",
+        "fs",
+        "gapi",
+        "intrinsics",
+        "jpeg",
+        "png",
+        "quirc",
+        "thread",
+        "tiff",
+        "webp"
       ]
     }
   ]

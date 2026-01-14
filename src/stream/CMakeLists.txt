@@ -67,32 +67,19 @@ if(EXOSIP2_FOUND)
         # 使用导入目标（从源码编译）
         message(STATUS "Linking eXosip2 from source build")
         
-        # 直接链接库文件路径（确保依赖关系）
-        if(TARGET exosip2 AND TARGET osip2)
-            # 确保 ExternalProject 先构建
-            if(TARGET exosip2_libs_ready)
-                add_dependencies(stream exosip2_libs_ready)
-            else()
-                add_dependencies(stream exosip2 osip2)
-            endif()
-            # 从缓存变量获取安装目录
-            if(NOT DEFINED EXOSIP2_INSTALL_DIR)
-                set(EXOSIP2_INSTALL_DIR "${CMAKE_BINARY_DIR}/third_party/exosip2-install")
-            endif()
-            # 直接链接库文件
-            target_link_libraries(stream PUBLIC
-                ${EXOSIP2_INSTALL_DIR}/lib/${CMAKE_STATIC_LIBRARY_PREFIX}eXosip2${CMAKE_STATIC_LIBRARY_SUFFIX}
-                ${EXOSIP2_INSTALL_DIR}/lib/${CMAKE_STATIC_LIBRARY_PREFIX}osip2${CMAKE_STATIC_LIBRARY_SUFFIX}
-                ${EXOSIP2_INSTALL_DIR}/lib/${CMAKE_STATIC_LIBRARY_PREFIX}osipparser2${CMAKE_STATIC_LIBRARY_SUFFIX}
-            )
-        else()
-            # 使用导入目标
-            target_link_libraries(stream PUBLIC
-                exosip2::exosip2
-                osip2::osip2
-                osipparser2::osipparser2
-            )
+        # 确保 ExternalProject 先构建
+        if(TARGET exosip2_libs_ready)
+            add_dependencies(stream exosip2_libs_ready)
+        elseif(TARGET exosip2 AND TARGET osip2)
+            add_dependencies(stream exosip2 osip2)
         endif()
+        
+        # 使用导入目标（会自动处理依赖关系）
+        target_link_libraries(stream PUBLIC
+            exosip2::exosip2
+            osip2::osip2
+            osipparser2::osipparser2
+        )
     else()
         # 使用系统安装的库
         message(STATUS "Linking eXosip2 from system")

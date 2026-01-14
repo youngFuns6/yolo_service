@@ -23,6 +23,8 @@ VCPKG_TRIPLET=""
 CUSTOM_TRIPLET=""
 CLEAN=false
 JOBS=$(nproc 2>/dev/null || echo 4)
+NO_PROXY=false
+TARGET_SYSROOT=""
 
 # 显示帮助信息
 show_help() {
@@ -37,6 +39,8 @@ show_help() {
     -t, --type TYPE              构建类型 (Debug|Release|RelWithDebInfo) [默认: Release]
     -c, --clean                  清理构建目录
     -j, --jobs N                 并行编译任务数 [默认: CPU核心数]
+    --sysroot PATH               目标系统 sysroot 路径（用于交叉编译兼容性）
+    --no-proxy                   禁用代理（用于 vcpkg 下载）
     -h, --help                   显示此帮助信息
 
 平台和架构组合示例:
@@ -50,7 +54,12 @@ show_help() {
     $0                          # Linux x64 Release
     $0 -p windows -a x64        # Windows x64 Release
     $0 -p linux -a arm64 -t Debug  # Linux ARM64 Debug
+    $0 -p linux -a arm64 --sysroot /path/to/sysroot  # 使用目标系统 sysroot
     $0 -c                       # 清理构建目录
+
+GLIBC 兼容性:
+    如果目标系统的 GLIBC 版本较旧，请使用 --sysroot 指定目标系统的 sysroot。
+    详见 GLIBC_COMPATIBILITY.md 文档。
 EOF
 }
 
@@ -77,6 +86,14 @@ parse_args() {
             -j|--jobs)
                 JOBS="$2"
                 shift 2
+                ;;
+            --sysroot)
+                TARGET_SYSROOT="$2"
+                shift 2
+                ;;
+            --no-proxy)
+                NO_PROXY=true
+                shift
                 ;;
             -h|--help)
                 show_help
@@ -177,6 +194,88 @@ check_cmake() {
     echo -e "${GREEN}找到 CMake: $CMAKE_VERSION${NC}"
 }
 
+# 检查并处理代理设置
+check_proxy() {
+    if [ "$NO_PROXY" = true ]; then
+        echo -e "${YELLOW}禁用代理设置（用于 vcpkg 下载）${NC}"
+        unset HTTP_PROXY
+        unset HTTPS_PROXY
+        unset http_proxy
+        unset https_proxy
+        unset ALL_PROXY
+        unset all_proxy
+        export HTTP_PROXY=""
+        export HTTPS_PROXY=""
+        export http_proxy=""
+        export https_proxy=""
+        export ALL_PROXY=""
+        export all_proxy=""
+    else
+        # 统一处理大小写的代理环境变量
+        # 优先使用已设置的环境变量，如果没有则使用默认值
+        HTTP_PROXY_VAL="${HTTP_PROXY:-${http_proxy}}"
+        HTTPS_PROXY_VAL="${HTTPS_PROXY:-${https_proxy}}"
+        ALL_PROXY_VAL="${ALL_PROXY:-${all_proxy}}"
+        
+        # 如果用户已经设置了代理，使用用户的设置
+        if [ -n "$HTTP_PROXY_VAL" ] || [ -n "$HTTPS_PROXY_VAL" ] || [ -n "$ALL_PROXY_VAL" ]; then
+            # 统一设置所有代理环境变量（大小写都设置，确保兼容性）
+            if [ -n "$HTTP_PROXY_VAL" ]; then
+                export HTTP_PROXY="$HTTP_PROXY_VAL"
+                export http_proxy="$HTTP_PROXY_VAL"
+            fi
+            if [ -n "$HTTPS_PROXY_VAL" ]; then
+                export HTTPS_PROXY="$HTTPS_PROXY_VAL"
+                export https_proxy="$HTTPS_PROXY_VAL"
+            fi
+            if [ -n "$ALL_PROXY_VAL" ]; then
+                export ALL_PROXY="$ALL_PROXY_VAL"
+                export all_proxy="$ALL_PROXY_VAL"
+            fi
+            
+            PROXY_URL="${HTTPS_PROXY_VAL:-${HTTP_PROXY_VAL:-${ALL_PROXY_VAL}}}"
+            echo -e "${BLUE}检测到代理设置: ${PROXY_URL}${NC}"
+            
+            # 提取代理地址和端口用于连接测试
+            PROXY_HOST=""
+            PROXY_PORT=""
+            if [[ "$PROXY_URL" =~ ^https?://([^:/]+):([0-9]+) ]]; then
+                PROXY_HOST="${BASH_REMATCH[1]}"
+                PROXY_PORT="${BASH_REMATCH[2]}"
+            elif [[ "$PROXY_URL" =~ ^socks5://([^:/]+):([0-9]+) ]]; then
+                PROXY_HOST="${BASH_REMATCH[1]}"
+                PROXY_PORT="${BASH_REMATCH[2]}"
+            fi
+            
+            # 检查代理是否可达（使用 nc 或 timeout，如果都不可用则跳过检查）
+            if [ -n "$PROXY_HOST" ] && [ -n "$PROXY_PORT" ]; then
+                if command -v nc >/dev/null 2>&1; then
+                    if ! timeout 2 nc -z "$PROXY_HOST" "$PROXY_PORT" 2>/dev/null; then
+                        echo -e "${YELLOW}警告: 代理 ${PROXY_URL} 不可达${NC}"
+                        echo -e "${YELLOW}建议: 使用 --no-proxy 选项禁用代理，或确保代理服务正在运行${NC}"
+                        echo -e "${BLUE}继续尝试构建，但可能会失败...${NC}"
+                    else
+                        echo -e "${GREEN}代理连接正常${NC}"
+                    fi
+                elif command -v timeout >/dev/null 2>&1; then
+                    # 使用 timeout + bash 内置 /dev/tcp（如果支持）
+                    if ! timeout 2 bash -c "echo > /dev/tcp/$PROXY_HOST/$PROXY_PORT" 2>/dev/null; then
+                        echo -e "${YELLOW}警告: 代理 ${PROXY_URL} 可能不可达${NC}"
+                        echo -e "${YELLOW}建议: 使用 --no-proxy 选项禁用代理，或确保代理服务正在运行${NC}"
+                        echo -e "${BLUE}继续尝试构建...${NC}"
+                    else
+                        echo -e "${GREEN}代理连接正常${NC}"
+                    fi
+                else
+                    echo -e "${BLUE}无法检测代理连接性，继续构建...${NC}"
+                fi
+            fi
+        else
+            echo -e "${BLUE}未检测到代理设置${NC}"
+        fi
+    fi
+}
+
 # 检查 vcpkg
 check_vcpkg() {
     if [ -z "$VCPKG_ROOT" ]; then
@@ -260,6 +359,14 @@ configure_cmake() {
             echo -e "${BLUE}清理 CMake 缓存...${NC}"
             rm -rf "$BUILD_DIR/CMakeCache.txt" "$BUILD_DIR/CMakeFiles"
         fi
+        # 检查 ARM64 交叉编译时，如果 CMAKE_AR 被缓存到构建目录中（错误），则清理缓存
+        if [ "$ARCH" = "arm64" ] && [ "$(uname -m)" != "aarch64" ]; then
+            CACHED_AR=$(grep "^CMAKE_AR:FILEPATH=" "$BUILD_DIR/CMakeCache.txt" 2>/dev/null | cut -d'=' -f2)
+            if [ -n "$CACHED_AR" ] && echo "$CACHED_AR" | grep -q "$BUILD_DIR"; then
+                echo -e "${YELLOW}警告: 检测到 CMAKE_AR 缓存路径错误，清理 CMake 缓存...${NC}"
+                rm -rf "$BUILD_DIR/CMakeCache.txt" "$BUILD_DIR/CMakeFiles"
+            fi
+        fi
     fi
     
     cd "$BUILD_DIR"
@@ -331,20 +438,76 @@ configure_cmake() {
                 # 检查 ARM64 交叉编译工具链是否安装
                 if command -v aarch64-linux-gnu-g++ >/dev/null 2>&1; then
                     echo -e "${GREEN}找到 ARM64 交叉编译工具链${NC}"
+                    # 禁用 cairo 的 x11 功能以避免交叉编译时的头文件冲突
+                    export VCPKG_CAIRO_FEATURES=""
                     # 注意：不设置全局 CC/CXX 环境变量，避免影响 vcpkg 构建 x64-linux 工具包
                     # 只通过 CMake 参数指定目标架构的编译器
+                    # 获取交叉编译工具链的 sysroot 路径
+                    SYSROOT=$(aarch64-linux-gnu-gcc -print-sysroot 2>/dev/null || echo "")
+                    # 查找 ARM64 系统库路径
+                    ARM64_LIB_PATH="/usr/aarch64-linux-gnu/lib"
+                    if [ ! -d "$ARM64_LIB_PATH" ]; then
+                        # 尝试其他可能的路径
+                        ARM64_LIB_PATH=$(find /usr -type d -name "aarch64-linux-gnu" 2>/dev/null | head -1)
+                        if [ -n "$ARM64_LIB_PATH" ] && [ -d "$ARM64_LIB_PATH/lib" ]; then
+                            ARM64_LIB_PATH="$ARM64_LIB_PATH/lib"
+                        else
+                            ARM64_LIB_PATH=""
+                        fi
+                    fi
+                    
+                    # 动态查找工具链工具的绝对路径
+                    AR_TOOL=$(which aarch64-linux-gnu-ar 2>/dev/null || echo "/usr/bin/aarch64-linux-gnu-ar")
+                    RANLIB_TOOL=$(which aarch64-linux-gnu-ranlib 2>/dev/null || echo "/usr/bin/aarch64-linux-gnu-ranlib")
+                    STRIP_TOOL=$(which aarch64-linux-gnu-strip 2>/dev/null || echo "/usr/bin/aarch64-linux-gnu-strip")
+                    CC_TOOL=$(which aarch64-linux-gnu-gcc 2>/dev/null || echo "aarch64-linux-gnu-gcc")
+                    CXX_TOOL=$(which aarch64-linux-gnu-g++ 2>/dev/null || echo "aarch64-linux-gnu-g++")
+                    
                     CMAKE_ARGS+=(
                         -DCMAKE_SYSTEM_NAME=Linux
                         -DCMAKE_SYSTEM_PROCESSOR=aarch64
-                        -DCMAKE_C_COMPILER=aarch64-linux-gnu-gcc
-                        -DCMAKE_CXX_COMPILER=aarch64-linux-gnu-g++
-                        -DCMAKE_AR=aarch64-linux-gnu-ar
-                        -DCMAKE_STRIP=aarch64-linux-gnu-strip
+                        -DCMAKE_C_COMPILER="$CC_TOOL"
+                        -DCMAKE_CXX_COMPILER="$CXX_TOOL"
+                        -DCMAKE_AR="$AR_TOOL"
+                        -DCMAKE_RANLIB="$RANLIB_TOOL"
+                        -DCMAKE_STRIP="$STRIP_TOOL"
                         -DCMAKE_FIND_ROOT_PATH_MODE_PROGRAM=NEVER
-                        -DCMAKE_FIND_ROOT_PATH_MODE_LIBRARY=ONLY
-                        -DCMAKE_FIND_ROOT_PATH_MODE_INCLUDE=ONLY
-                        -DCMAKE_FIND_ROOT_PATH_MODE_PACKAGE=ONLY
+                        -DCMAKE_FIND_ROOT_PATH_MODE_LIBRARY=BOTH
+                        -DCMAKE_FIND_ROOT_PATH_MODE_INCLUDE=BOTH
+                        -DCMAKE_FIND_ROOT_PATH_MODE_PACKAGE=BOTH
                     )
+                    # 如果指定了目标 sysroot，优先使用它（用于兼容目标系统的 GLIBC 版本）
+                    if [ -n "$TARGET_SYSROOT" ] && [ -d "$TARGET_SYSROOT" ]; then
+                        CMAKE_ARGS+=(-DCMAKE_SYSROOT="$TARGET_SYSROOT")
+                        echo -e "${BLUE}使用指定的目标 sysroot: $TARGET_SYSROOT${NC}"
+                    # 如果找到了工具链的 sysroot，设置它以便查找系统库
+                    elif [ -n "$SYSROOT" ] && [ -d "$SYSROOT" ]; then
+                        CMAKE_ARGS+=(-DCMAKE_SYSROOT="$SYSROOT")
+                        echo -e "${BLUE}使用工具链 sysroot: $SYSROOT${NC}"
+                        echo -e "${YELLOW}注意: 如果目标系统 GLIBC 版本较旧，请使用 --sysroot 指定目标系统的 sysroot${NC}"
+                    else
+                        echo -e "${YELLOW}警告: 未找到 sysroot，二进制可能不兼容目标系统的 GLIBC 版本${NC}"
+                        echo -e "${YELLOW}建议: 使用 --sysroot 指定目标系统的 sysroot 路径${NC}"
+                    fi
+                    
+                    # 添加链接器标志以确保兼容性
+                    CMAKE_ARGS+=(
+                        -DCMAKE_EXE_LINKER_FLAGS="-Wl,--hash-style=both -Wl,--as-needed"
+                        -DCMAKE_SHARED_LINKER_FLAGS="-Wl,--hash-style=both -Wl,--as-needed"
+                    )
+                    # 添加 ARM64 系统库路径到库搜索路径和查找根路径
+                    if [ -n "$ARM64_LIB_PATH" ] && [ -d "$ARM64_LIB_PATH" ]; then
+                        # 设置库路径环境变量，确保 CMake 和链接器能找到系统库
+                        export CMAKE_LIBRARY_PATH="$ARM64_LIB_PATH:${CMAKE_LIBRARY_PATH:-}"
+                        export CMAKE_PREFIX_PATH="$ARM64_LIB_PATH/..:${CMAKE_PREFIX_PATH:-}"
+                        export LD_LIBRARY_PATH="$ARM64_LIB_PATH:${LD_LIBRARY_PATH:-}"
+                        CMAKE_ARGS+=(
+                            -DCMAKE_LIBRARY_PATH="$ARM64_LIB_PATH"
+                            -DCMAKE_PREFIX_PATH="$ARM64_LIB_PATH/.."
+                            -DCMAKE_FIND_ROOT_PATH="$ARM64_LIB_PATH/.."
+                        )
+                        echo -e "${BLUE}添加系统库路径: $ARM64_LIB_PATH${NC}"
+                    fi
                 else
                     echo -e "${RED}错误: 未找到 ARM64 交叉编译工具链${NC}"
                     echo -e "${YELLOW}请安装交叉编译工具链:${NC}"
@@ -417,7 +580,12 @@ configure_cmake() {
         echo ""
         echo -e "${YELLOW}建议:${NC}"
         echo -e "${BLUE}  - 检查网络连接，重试构建${NC}"
-        echo -e "${BLUE}  - 如果使用代理，检查 HTTP_PROXY 和 HTTPS_PROXY 环境变量${NC}"
+        if [ -n "$HTTP_PROXY" ] || [ -n "$HTTPS_PROXY" ]; then
+            echo -e "${BLUE}  - 如果代理不可用，尝试使用 --no-proxy 选项:${NC}"
+            echo -e "${GREEN}    ./build.sh --no-proxy -a arm64${NC}"
+        else
+            echo -e "${BLUE}  - 如果使用代理，检查 HTTP_PROXY 和 HTTPS_PROXY 环境变量${NC}"
+        fi
         echo -e "${BLUE}  - 查看详细日志: ${BUILD_DIR}/vcpkg-manifest-install.log${NC}"
         cd ../..
         exit 1
@@ -483,6 +651,7 @@ main() {
     fi
     
     check_cmake
+    check_proxy
     check_vcpkg
     determine_triplet
     create_build_dir

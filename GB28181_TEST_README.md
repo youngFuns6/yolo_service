@@ -45,7 +45,7 @@ docker logs -f gb28181-srs
 | SIP | 5060 | 5062 | GB28181 SIP 协议 |
 | HTTP API | 1985 | 1986 | SRS API 接口 |
 | RTMP | 1935 | 1936 | RTMP 推流 |
-| HTTP | 8080 | 8081 | HTTP 播放和测试页面 |
+| HTTP | 8081 | 8081 | HTTP 播放和测试页面 |
 | RTP | 30000-30100 | 30100-30200 | RTP 媒体流 |
 
 ## 客户端配置示例
@@ -227,12 +227,71 @@ curl http://localhost:1986/api/v1/clients/
 
 ## 故障排查
 
+### 问题：Docker 镜像拉取失败（403 Forbidden 或其他错误）
+
+**错误信息示例**：
+```
+Error response from daemon: failed to resolve reference "docker.io/7040210/gb28181:latest": 
+unexpected status from HEAD request to https://docker.m.daocloud.io/v2/...: 403 Forbidden
+```
+
+**解决方案**：
+
+1. **使用修复脚本（推荐）**：
+   ```bash
+   ./fix_gb28181_image.sh
+   ```
+   该脚本会自动尝试多种方式拉取镜像。
+
+2. **手动拉取镜像**：
+   ```bash
+   # 直接从 Docker Hub 拉取
+   docker pull 7040210/gb28181:latest
+   
+   # 或从阿里云镜像源拉取
+   docker pull registry.cn-hangzhou.aliyuncs.com/7040210/gb28181:latest
+   docker tag registry.cn-hangzhou.aliyuncs.com/7040210/gb28181:latest 7040210/gb28181:latest
+   ```
+
+3. **配置 Docker 镜像加速器**：
+   - Windows: Docker Desktop -> Settings -> Docker Engine
+   - 添加镜像源配置：
+     ```json
+     {
+       "registry-mirrors": [
+         "https://docker.mirrors.ustc.edu.cn",
+         "https://hub-mirror.c.163.com",
+         "https://mirror.baidubce.com"
+       ]
+     }
+     ```
+   - 重启 Docker Desktop
+
+4. **使用备选镜像**：
+   编辑 `docker-compose-gb28181-test.yml`，将：
+   ```yaml
+   image: 7040210/gb28181:latest
+   ```
+   改为：
+   ```yaml
+   image: ossrs/srs:4
+   ```
+   ⚠️ 注意：官方 SRS 镜像可能不包含 GB28181 支持，需要自行编译。
+
+5. **检查网络连接**：
+   ```bash
+   # 测试网络连接
+   ping docker.io
+   curl -I https://docker.io
+   ```
+
 ### 问题：容器无法启动
 
 **解决方案**：
-1. 检查端口是否被占用：`lsof -i :5062`
+1. 检查端口是否被占用：`lsof -i :5062` (Linux/Mac) 或 `netstat -ano | findstr :5062` (Windows)
 2. 检查配置文件是否存在：`ls -la gb28181-test-data/srs/srs.conf`
 3. 查看容器日志：`docker logs gb28181-srs`
+4. 检查镜像是否存在：`docker images | grep gb28181`
 
 ### 问题：客户端无法注册
 
