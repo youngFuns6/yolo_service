@@ -1,0 +1,34 @@
+version: '3.8'
+
+services:
+  detector-service:
+    build:
+      context: .
+      dockerfile: Dockerfile.arm64
+      platforms:
+        - linux/arm64
+      args:
+        VCPKG_VERSION: "2024.01.12"
+    image: detector-service:arm64-ubuntu20.04
+    container_name: detector-service-arm64
+    platform: linux/arm64
+    ports:
+      - "9090:9090"
+    volumes:
+      # 挂载模型目录（如果需要）
+      - ./models:/app/models:ro
+      # 挂载数据库目录（如果需要持久化）
+      - ./data:/app/data
+      # 挂载配置文件（如果需要）
+      - ./config:/app/config:ro
+    environment:
+      - TZ=Asia/Shanghai
+      - LD_LIBRARY_PATH=/usr/local/lib
+    restart: unless-stopped
+    networks:
+      - detector-network
+
+networks:
+  detector-network:
+    driver: bridge
+

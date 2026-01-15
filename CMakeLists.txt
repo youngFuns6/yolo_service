@@ -10,6 +10,14 @@ if(CMAKE_SYSTEM_NAME STREQUAL "Windows" AND NOT CMAKE_CROSSCOMPILING)
     endif()
 endif()
 
+# 在 project() 之前设置 vcpkg triplet（如果通过 CMake 参数或环境变量传入）
+# 这确保在重新配置时 triplet 值被保留
+if(DEFINED VCPKG_TARGET_TRIPLET)
+    set(VCPKG_TARGET_TRIPLET "${VCPKG_TARGET_TRIPLET}" CACHE STRING "vcpkg target triplet")
+elseif(DEFINED ENV{VCPKG_TARGET_TRIPLET})
+    set(VCPKG_TARGET_TRIPLET "$ENV{VCPKG_TARGET_TRIPLET}" CACHE STRING "vcpkg target triplet")
+endif()
+
 project(detector_service)
 
 set(CMAKE_CXX_STANDARD 17)
@@ -52,22 +60,52 @@ set(CMAKE_LIBRARY_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/lib)
 set(CMAKE_ARCHIVE_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/lib)
 
 # vcpkg 配置
+# 注意：CMAKE_TOOLCHAIN_FILE 应该通过命令行参数在 project() 之前设置
+# 这里只用于信息显示和确保 VCPKG_TARGET_TRIPLET 被缓存
 if(DEFINED ENV{VCPKG_ROOT})
     set(VCPKG_ROOT $ENV{VCPKG_ROOT})
 else()
     message(WARNING "vcpkg not found, using system libraries")
 endif()
 
-if(VCPKG_ROOT AND EXISTS "${VCPKG_ROOT}/scripts/buildsystems/vcpkg.cmake")
-    set(CMAKE_TOOLCHAIN_FILE "${VCPKG_ROOT}/scripts/buildsystems/vcpkg.cmake")
-    message(STATUS "Using vcpkg from: ${VCPKG_ROOT}")
-    message(STATUS "Using vcpkg triplet: ${VCPKG_TARGET_TRIPLET}")
-else()
-    message(WARNING "vcpkg not found, using system libraries")
+# 确保 VCPKG_TARGET_TRIPLET 被缓存，以便在重新配置时保留
+# 优先使用 CMake 变量，其次使用环境变量
+if(DEFINED VCPKG_TARGET_TRIPLET)
+    set(VCPKG_TARGET_TRIPLET "${VCPKG_TARGET_TRIPLET}" CACHE STRING "vcpkg target triplet" FORCE)
+elseif(DEFINED ENV{VCPKG_TARGET_TRIPLET})
+    set(VCPKG_TARGET_TRIPLET "$ENV{VCPKG_TARGET_TRIPLET}" CACHE STRING "vcpkg target triplet" FORCE)
 endif()
 
 # 添加 cmake 模块路径
 list(APPEND CMAKE_MODULE_PATH ${CMAKE_SOURCE_DIR}/cmake)
+
+# 如果 vcpkg 工具链文件已加载，设置 vcpkg 安装路径以便查找包
+if(CMAKE_TOOLCHAIN_FILE AND EXISTS "${CMAKE_TOOLCHAIN_FILE}")
+    # vcpkg 工具链文件已加载，尝试查找 vcpkg_installed 目录
+    get_filename_component(VCPKG_INSTALLED_DIR "${CMAKE_BINARY_DIR}/vcpkg_installed" ABSOLUTE)
+    if(EXISTS "${VCPKG_INSTALLED_DIR}/${VCPKG_TARGET_TRIPLET}")
+        # 设置 CMAKE_PREFIX_PATH 以便 find_package 能找到 vcpkg 安装的包
+        list(APPEND CMAKE_PREFIX_PATH "${VCPKG_INSTALLED_DIR}/${VCPKG_TARGET_TRIPLET}")
+        
+        # 设置 OpenCV_DIR
+        set(OPENCV_SHARE_DIR "${VCPKG_INSTALLED_DIR}/${VCPKG_TARGET_TRIPLET}/share/opencv4")
+        if(EXISTS "${OPENCV_SHARE_DIR}")
+            set(OpenCV_DIR "${OPENCV_SHARE_DIR}" CACHE PATH "OpenCV config directory" FORCE)
+            message(STATUS "Setting OpenCV_DIR to: ${OpenCV_DIR}")
+        endif()
+        
+        # 添加 FFMPEG 的 FindFFMPEG.cmake 到 CMAKE_MODULE_PATH
+        set(FFMPEG_SHARE_DIR "${VCPKG_INSTALLED_DIR}/${VCPKG_TARGET_TRIPLET}/share/ffmpeg")
+        if(EXISTS "${FFMPEG_SHARE_DIR}")
+            list(APPEND CMAKE_MODULE_PATH "${FFMPEG_SHARE_DIR}")
+            message(STATUS "Adding FFMPEG module path: ${FFMPEG_SHARE_DIR}")
+        endif()
+        
+        message(STATUS "Using vcpkg from: ${VCPKG_ROOT}")
+        message(STATUS "Using vcpkg triplet: ${VCPKG_TARGET_TRIPLET}")
+        message(STATUS "vcpkg installed dir: ${VCPKG_INSTALLED_DIR}/${VCPKG_TARGET_TRIPLET}")
+    endif()
+endif()
 
 # 查找依赖包
 find_package(OpenCV REQUIRED)

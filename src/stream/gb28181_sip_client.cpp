@@ -181,15 +181,50 @@ void GB28181SipClient::handleEvent() {
 }
 
 bool GB28181SipClient::doRegister() {
-    if (!exosip_context) return false;
+    if (!exosip_context) {
+        std::cerr << "GB28181 SIP: eXosip上下文为空" << std::endl;
+        return false;
+    }
+    
+    // 验证必需的配置字段
+    if (config.device_id.empty()) {
+        std::cerr << "GB28181 SIP: 设备ID为空" << std::endl;
+        return false;
+    }
+    
+    if (config.sip_server_domain.empty()) {
+        std::cerr << "GB28181 SIP: SIP服务器域为空" << std::endl;
+        return false;
+    }
+    
+    if (config.sip_server_ip.empty()) {
+        std::cerr << "GB28181 SIP: SIP服务器IP为空" << std::endl;
+        return false;
+    }
+    
+    if (config.sip_server_port <= 0 || config.sip_server_port > 65535) {
+        std::cerr << "GB28181 SIP: SIP服务器端口无效: " << config.sip_server_port << std::endl;
+        return false;
+    }
+    
+    if (config.local_sip_port <= 0 || config.local_sip_port > 65535) {
+        std::cerr << "GB28181 SIP: 本地SIP端口无效: " << config.local_sip_port << std::endl;
+        return false;
+    }
+    
+    if (config.register_expires <= 0) {
+        std::cerr << "GB28181 SIP: 注册有效期无效: " << config.register_expires << std::endl;
+        return false;
+    }
     
     osip_message_t* reg = nullptr;
     
     // 构建From URI: sip:device_id@domain
     std::string from_uri = "sip:" + config.device_id + "@" + config.sip_server_domain;
     
-    // 构建To URI: sip:server_id@domain
-    std::string to_uri = "sip:" + config.sip_server_id + "@" + config.sip_server_domain;
+    // 构建To URI: sip:server_id@domain (如果server_id为空，使用device_id)
+    std::string server_id = config.sip_server_id.empty() ? config.device_id : config.sip_server_id;
+    std::string to_uri = "sip:" + server_id + "@" + config.sip_server_domain;
     
     // 构建Contact URI: sip:device_id@local_ip:local_port
     std::string contact_uri = "sip:" + config.device_id + "@127.0.0.1:" + 
@@ -198,6 +233,11 @@ bool GB28181SipClient::doRegister() {
     // 构建Proxy URI: sip:server_ip:server_port
     std::string proxy_uri = "sip:" + config.sip_server_ip + ":" + 
                            std::to_string(config.sip_server_port);
+    
+    // 打印调试信息
+    std::cerr << "GB28181 SIP: 准备注册 - From: " << from_uri 
+              << ", Proxy: " << proxy_uri 
+              << ", Contact: " << contact_uri << std::endl;
     
     eXosip_lock(exosip_context);
     
@@ -212,7 +252,10 @@ bool GB28181SipClient::doRegister() {
     
     if (register_id < 0) {
         eXosip_unlock(exosip_context);
-        std::cerr << "GB28181 SIP: 构建注册消息失败" << std::endl;
+        std::cerr << "GB28181 SIP: 构建注册消息失败 (register_id=" << register_id 
+                  << "), From: " << from_uri 
+                  << ", Proxy: " << proxy_uri 
+                  << ", Contact: " << contact_uri << std::endl;
         return false;
     }
     
@@ -225,10 +268,11 @@ bool GB28181SipClient::doRegister() {
     eXosip_unlock(exosip_context);
     
     if (ret != 0) {
-        std::cerr << "GB28181 SIP: 发送注册消息失败" << std::endl;
+        std::cerr << "GB28181 SIP: 发送注册消息失败 (ret=" << ret << ")" << std::endl;
         return false;
     }
     
+    std::cerr << "GB28181 SIP: 注册消息已发送" << std::endl;
     return true;
 }
 

@@ -1,0 +1,73 @@
+# 构建目录
+build/
+**/build/
+**/CMakeFiles/
+**/CMakeCache.txt
+**/*.ninja
+**/compile_commands.json
+**/cmake_install.cmake
+
+# IDE 配置
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Git
+.git/
+.gitignore
+.gitattributes
+
+# 日志文件
+*.log
+**/*.log
+
+# 数据库文件
+*.db
+*.sqlite
+*.sqlite3
+
+# 临时文件
+*.tmp
+*.temp
+.cache/
+**/.cache/
+
+# 文档
+*.md
+!README.md
+
+# Docker 相关
+Dockerfile*
+docker-compose*.yml
+.dockerignore
+docker-build*.sh
+
+# Node.js / 前端构建产物
+website/node_modules/
+website/dist/
+website/.vite/
+website/.pnpm-store/
+**/node_modules/
+**/dist/
+**/.vite/
+**/.pnpm-store/
+**/pnpm-lock.yaml
+**/package-lock.json
+**/yarn.lock
+
+# 第三方库和构建产物
+**/third_party/
+**/vcpkg_installed/
+**/exosip2-prefix/
+**/osip2-prefix/
+**/*.tar.gz
+**/*.zip
+
+# 其他
+.DS_Store
+Thumbs.db
+*.bak
+*.backup
+

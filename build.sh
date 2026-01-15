@@ -384,6 +384,40 @@ configure_cmake() {
         -DCMAKE_EXPORT_COMPILE_COMMANDS=ON
     )
     
+    # 在交叉编译时，明确指定 host triplet，确保 vcpkg 使用正确的编译器构建工具包
+    if [ "$ARCH" = "arm64" ] && [ "$(uname -m)" != "aarch64" ]; then
+        # 检测主机架构并设置 host triplet
+        HOST_ARCH=$(uname -m)
+        case "$HOST_ARCH" in
+            x86_64)
+                export VCPKG_HOST_TRIPLET="x64-linux"
+                CMAKE_ARGS+=(-DVCPKG_HOST_TRIPLET="x64-linux")
+                echo -e "${BLUE}设置 vcpkg host triplet: x64-linux（用于构建工具包）${NC}"
+                # 保存原生编译器，确保 vcpkg 在构建 host triplet 包时使用它们
+                # 这些环境变量会被 vcpkg 用于构建 host tools
+                if [ -z "$VCPKG_HOST_CC" ]; then
+                    export VCPKG_HOST_CC="gcc"
+                    export VCPKG_HOST_CXX="g++"
+                    echo -e "${BLUE}设置 host 编译器: gcc/g++（用于构建工具包）${NC}"
+                fi
+                ;;
+            aarch64)
+                export VCPKG_HOST_TRIPLET="arm64-linux"
+                CMAKE_ARGS+=(-DVCPKG_HOST_TRIPLET="arm64-linux")
+                echo -e "${BLUE}设置 vcpkg host triplet: arm64-linux（用于构建工具包）${NC}"
+                ;;
+            *)
+                echo -e "${YELLOW}警告: 未知的主机架构 $HOST_ARCH，vcpkg 将自动检测 host triplet${NC}"
+                ;;
+        esac
+    fi
+    
+    # 添加 overlay-ports 以使用项目自定义的端口（如 onnxruntime 1.21.0 for GCC 9）
+    if [ -d "$SCRIPT_DIR/ports" ]; then
+        CMAKE_ARGS+=(-DVCPKG_OVERLAY_PORTS="$SCRIPT_DIR/ports")
+        echo -e "${BLUE}使用 overlay-ports: $SCRIPT_DIR/ports${NC}"
+    fi
+    
     # 如果使用自定义 triplet，需要将其复制到 vcpkg 的 triplets 目录或通过环境变量指定
     if [ -n "$CUSTOM_TRIPLET" ] && [ -f "$CUSTOM_TRIPLET" ]; then
         # 将自定义 triplet 复制到 vcpkg triplets 目录
@@ -436,8 +470,26 @@ configure_cmake() {
     # 交叉编译工具链配置
     case "${PLATFORM}" in
         linux)
+            # Linux x64 本地编译配置（确保使用本地编译器）
+            if [ "$ARCH" = "x64" ] && [ "$(uname -m)" = "x86_64" ]; then
+                echo -e "${BLUE}检测到 Linux x64 本地编译环境${NC}"
+                # 明确设置使用本地 x64 编译器，避免 vcpkg 误选交叉编译器
+                # 清除可能影响编译器检测的环境变量
+                unset CC
+                unset CXX
+                # 确保 vcpkg 使用本地编译器
+                export VCPKG_HOST_CC="gcc"
+                export VCPKG_HOST_CXX="g++"
+                # 明确指定本地编译器路径
+                NATIVE_CC=$(which gcc 2>/dev/null || echo "gcc")
+                NATIVE_CXX=$(which g++ 2>/dev/null || echo "g++")
+                CMAKE_ARGS+=(
+                    -DCMAKE_C_COMPILER="$NATIVE_CC"
+                    -DCMAKE_CXX_COMPILER="$NATIVE_CXX"
+                )
+                echo -e "${GREEN}使用本地 x64 编译器: $NATIVE_CC / $NATIVE_CXX${NC}"
             # Linux ARM64 交叉编译配置
-            if [ "$ARCH" = "arm64" ] && [ "$(uname -m)" != "aarch64" ]; then
+            elif [ "$ARCH" = "arm64" ] && [ "$(uname -m)" != "aarch64" ]; then
                 echo -e "${YELLOW}检测到 Linux ARM64 交叉编译环境${NC}"
                 
                 # 检查 ARM64 交叉编译工具链是否安装
@@ -468,6 +520,29 @@ configure_cmake() {
                     CC_TOOL=$(which aarch64-linux-gnu-gcc 2>/dev/null || echo "aarch64-linux-gnu-gcc")
                     CXX_TOOL=$(which aarch64-linux-gnu-g++ 2>/dev/null || echo "aarch64-linux-gnu-g++")
                     
+                    # 保存原始的 CC/CXX 环境变量（用于 vcpkg 构建 host tools）
+                    # 确保 vcpkg 在构建 x64-linux 工具包时使用本地编译器
+                    # 注意：不要设置全局 CC/CXX，因为它们会影响 vcpkg 构建 host triplet 包
+                    # 而是通过 VCPKG_HOST_CC/VCPKG_HOST_CXX 来指定 host 编译器
+                    if [ -z "$VCPKG_ORIGINAL_CC" ]; then
+                        export VCPKG_ORIGINAL_CC="${CC:-gcc}"
+                        export VCPKG_ORIGINAL_CXX="${CXX:-g++}"
+                    fi
+                    # 确保 vcpkg 在构建 host triplet 包时使用原生编译器
+                    # 通过环境变量明确指定，避免被交叉编译器覆盖
+                    if [ -z "$VCPKG_HOST_CC" ] && [ "$(uname -m)" = "x86_64" ]; then
+                        export VCPKG_HOST_CC="gcc"
+                        export VCPKG_HOST_CXX="g++"
+                    fi
+                    
+                    # 保存原生编译器路径，用于 vcpkg 构建 host triplet 包
+                    NATIVE_CC=$(which gcc 2>/dev/null || echo "gcc")
+                    NATIVE_CXX=$(which g++ 2>/dev/null || echo "g++")
+                    
+                    # 设置交叉编译器的 CMake 变量
+                    # 注意：这些变量只影响目标架构的包，不影响 host triplet 包
+                    # 但为了确保 vcpkg 在构建 host triplet 包时使用原生编译器，
+                    # 我们需要通过环境变量明确指定
                     CMAKE_ARGS+=(
                         -DCMAKE_SYSTEM_NAME=Linux
                         -DCMAKE_SYSTEM_PROCESSOR=aarch64
@@ -481,6 +556,16 @@ configure_cmake() {
                         -DCMAKE_FIND_ROOT_PATH_MODE_INCLUDE=BOTH
                         -DCMAKE_FIND_ROOT_PATH_MODE_PACKAGE=BOTH
                     )
+                    
+                    # 为 vcpkg 设置环境变量，确保构建 host triplet 包时使用原生编译器
+                    # 这些环境变量会被 vcpkg 传递给构建 host tools 的构建系统
+                    export VCPKG_HOST_C_COMPILER="$NATIVE_CC"
+                    export VCPKG_HOST_CXX_COMPILER="$NATIVE_CXX"
+                    # 同时设置 CC/CXX 环境变量，确保 meson 等构建系统在构建 host triplet 包时使用原生编译器
+                    # 注意：这些变量只影响 vcpkg 构建 host tools，不影响目标架构的包
+                    # 因为 vcpkg 在构建 host tools 时会使用这些环境变量
+                    export VCPKG_HOST_CC="$NATIVE_CC"
+                    export VCPKG_HOST_CXX="$NATIVE_CXX"
                     # 如果找到了 sysroot，设置它以便查找系统库
                     if [ -n "$SYSROOT" ] && [ -d "$SYSROOT" ]; then
                         CMAKE_ARGS+=(-DCMAKE_SYSROOT="$SYSROOT")
@@ -578,6 +663,45 @@ configure_cmake() {
     # 设置 vcpkg 详细输出环境变量
     export VCPKG_FEATURE_FLAGS=manifests
     export VCPKG_VERBOSE=ON
+    # 设置 vcpkg triplet 环境变量，确保在重新配置时也能使用
+    export VCPKG_TARGET_TRIPLET="$VCPKG_TRIPLET"
+    
+    # 对于 x64-linux 构建，确保 vcpkg 使用本地编译器
+    # 防止 vcpkg 误选交叉编译器（如 ARM64 交叉编译器）
+    if [ "$ARCH" = "x64" ] && [ "$(uname -m)" = "x86_64" ] && [ "$VCPKG_TRIPLET" = "x64-linux" ]; then
+        # 明确设置 vcpkg 使用本地编译器
+        export VCPKG_HOST_CC="gcc"
+        export VCPKG_HOST_CXX="g++"
+        # 确保 CC/CXX 环境变量指向本地编译器（如果已设置）
+        if [ -n "$CC" ] && echo "$CC" | grep -q "aarch64"; then
+            echo -e "${YELLOW}警告: 检测到 CC 环境变量指向 ARM64 交叉编译器，已清除${NC}"
+            unset CC
+        fi
+        if [ -n "$CXX" ] && echo "$CXX" | grep -q "aarch64"; then
+            echo -e "${YELLOW}警告: 检测到 CXX 环境变量指向 ARM64 交叉编译器，已清除${NC}"
+            unset CXX
+        fi
+        # 设置 vcpkg 编译器检测环境变量，强制使用本地编译器
+        export VCPKG_C_COMPILER="gcc"
+        export VCPKG_CXX_COMPILER="g++"
+        echo -e "${BLUE}强制 vcpkg 使用本地 x64 编译器进行构建${NC}"
+    fi
+    
+    # 在交叉编译时，确保 vcpkg 构建 host tools 时使用本地编译器
+    # 这很重要，因为 vcpkg 需要构建一些工具（如 pkgconf）在主机上运行
+    if [ "$ARCH" = "arm64" ] && [ "$(uname -m)" != "aarch64" ]; then
+        # 保存原始的编译器环境变量（如果存在）
+        if [ -z "$VCPKG_ORIGINAL_CC" ]; then
+            # 确保 vcpkg 在构建 host tools 时使用本地编译器
+            # 不设置全局 CC/CXX，让 vcpkg 自动检测并使用本地编译器
+            # 但通过 VCPKG_HOST_TRIPLET 明确指定 host triplet
+            HOST_ARCH=$(uname -m)
+            if [ "$HOST_ARCH" = "x86_64" ]; then
+                export VCPKG_HOST_TRIPLET="x64-linux"
+                echo -e "${BLUE}设置 VCPKG_HOST_TRIPLET=x64-linux（确保工具包使用本地编译器）${NC}"
+            fi
+        fi
+    fi
     
     # 运行 CMake，并将输出同时显示和保存到日志
     if ! cmake ../.. "${CMAKE_ARGS[@]}" 2>&1 | tee cmake_config.log; then

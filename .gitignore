@@ -12,6 +12,7 @@ cmake_install.cmake
 !CMakeLists.txt
 !**/CMakeLists.txt
 !cmake/*.cmake
+!ports/**/portfile.cmake
 
 # 编译输出
 *.o
