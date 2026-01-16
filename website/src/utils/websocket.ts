@@ -40,7 +40,7 @@ class ChannelWebSocketManager {
 
     this.isConnecting = true;
     const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
-    const wsUrl = `${protocol}//${Config.BASE_URL_HOST}/ws/channel`;
+    const wsUrl = `${protocol}//${window.location.host}/ws/channel`;
 
     try {
       this.ws = new WebSocket(wsUrl);

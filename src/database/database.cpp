@@ -1,18 +1,8 @@
 #include "database.h"
+#include "common_utils.h"
 #include <iostream>
-#include <ctime>
-#include <iomanip>
-#include <sstream>
 
 namespace detector_service {
-
-std::string getCurrentTime() {
-    auto now = std::time(nullptr);
-    auto tm = *std::localtime(&now);
-    std::ostringstream oss;
-    oss << std::put_time(&tm, "%Y-%m-%d %H:%M:%S");
-    return oss.str();
-}
 
 bool Database::initialize(const std::string& db_path) {
     if (db_ != nullptr) {
@@ -104,6 +94,7 @@ bool Database::createTables() {
             register_expires INTEGER NOT NULL DEFAULT 3600,
             stream_mode TEXT NOT NULL DEFAULT 'PS',
             max_channels INTEGER NOT NULL DEFAULT 32,
+            sip_transport TEXT NOT NULL DEFAULT 'UDP',
             updated_at TEXT NOT NULL
         );
 
@@ -166,6 +157,18 @@ bool Database::createTables() {
         std::string error_str = err_msg;
         if (error_str.find("duplicate column name") == std::string::npos) {
             std::cerr << "添加report_url字段失败: " << err_msg << std::endl;
+        }
+        sqlite3_free(err_msg);
+    }
+
+    // 为现有数据库添加sip_transport字段（如果不存在）
+    const char* alter_sip_transport_sql = "ALTER TABLE gb28181_config ADD COLUMN sip_transport TEXT NOT NULL DEFAULT 'UDP'";
+    err_msg = nullptr;
+    rc = sqlite3_exec(db_, alter_sip_transport_sql, nullptr, nullptr, &err_msg);
+    if (rc != SQLITE_OK && err_msg) {
+        std::string error_str = err_msg;
+        if (error_str.find("duplicate column name") == std::string::npos) {
+            std::cerr << "添加sip_transport字段失败: " << err_msg << std::endl;
         }
         sqlite3_free(err_msg);
     }
@@ -859,8 +862,8 @@ bool Database::saveGB28181Config(const GB28181Config& config) {
             id, enabled, sip_server_ip, sip_server_port, sip_server_id, sip_server_domain,
             device_id, device_password, device_name, manufacturer, model,
             local_sip_port, rtp_port_start, rtp_port_end, heartbeat_interval, heartbeat_count,
-            register_expires, stream_mode, max_channels, updated_at
-        ) VALUES (1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            register_expires, stream_mode, max_channels, sip_transport, updated_at
+        ) VALUES (1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     )";
     
     sqlite3_stmt* stmt;
@@ -890,7 +893,8 @@ bool Database::saveGB28181Config(const GB28181Config& config) {
     sqlite3_bind_int(stmt, 16, config.register_expires);
     sqlite3_bind_text(stmt, 17, config.stream_mode.c_str(), -1, SQLITE_STATIC);
     sqlite3_bind_int(stmt, 18, config.max_channels);
-    sqlite3_bind_text(stmt, 19, updated_at.c_str(), -1, SQLITE_STATIC);
+    sqlite3_bind_text(stmt, 19, config.sip_transport.c_str(), -1, SQLITE_STATIC);
+    sqlite3_bind_text(stmt, 20, updated_at.c_str(), -1, SQLITE_STATIC);
     
     rc = sqlite3_step(stmt);
     sqlite3_finalize(stmt);
@@ -903,7 +907,7 @@ bool Database::loadGB28181Config(GB28181Config& config) {
         SELECT enabled, sip_server_ip, sip_server_port, sip_server_id, sip_server_domain,
                device_id, device_password, device_name, manufacturer, model,
                local_sip_port, rtp_port_start, rtp_port_end, heartbeat_interval, heartbeat_count,
-               register_expires, stream_mode, max_channels
+               register_expires, stream_mode, max_channels, sip_transport
         FROM gb28181_config WHERE id = 1
     )";
     
@@ -954,6 +958,9 @@ bool Database::loadGB28181Config(GB28181Config& config) {
         config.stream_mode = stream_mode ? stream_mode : "PS";
         
         config.max_channels = sqlite3_column_int(stmt, 17);
+        
+        const char* sip_transport = reinterpret_cast<const char*>(sqlite3_column_text(stmt, 18));
+        config.sip_transport = sip_transport ? sip_transport : "UDP";
         
         sqlite3_finalize(stmt);
         return true;

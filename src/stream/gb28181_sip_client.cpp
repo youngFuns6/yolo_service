@@ -46,14 +46,26 @@ bool GB28181SipClient::initialize(const GB28181Config& config) {
         return false;
     }
     
+    // 根据配置选择传输协议
+    int protocol = IPPROTO_UDP;  // 默认UDP
+    std::string transport_param = "udp";
+    if (config.sip_transport == "TCP" || config.sip_transport == "tcp") {
+        protocol = IPPROTO_TCP;
+        transport_param = "tcp";
+    }
+    
     // 监听本地SIP端口
-    if (eXosip_listen_addr(exosip_context, IPPROTO_UDP, nullptr, 
+    if (eXosip_listen_addr(exosip_context, protocol, nullptr, 
                            config.local_sip_port, AF_INET, 0) != 0) {
-        std::cerr << "GB28181 SIP: 无法监听端口 " << config.local_sip_port << std::endl;
+        std::cerr << "GB28181 SIP: 无法监听端口 " << config.local_sip_port 
+                  << " (协议: " << transport_param << ")" << std::endl;
         eXosip_quit(exosip_context);
         exosip_context = nullptr;
         return false;
     }
+    
+    std::cerr << "GB28181 SIP: 成功监听端口 " << config.local_sip_port 
+              << " (协议: " << transport_param << ")" << std::endl;
     
     // 设置用户代理
     std::string user_agent = config.manufacturer + " " + config.model;
@@ -219,20 +231,28 @@ bool GB28181SipClient::doRegister() {
     
     osip_message_t* reg = nullptr;
     
+    // 确定传输协议参数
+    std::string transport_param = "";
+    if (config.sip_transport == "TCP" || config.sip_transport == "tcp") {
+        transport_param = ";transport=tcp";
+    } else {
+        transport_param = ";transport=udp";
+    }
+    
     // 构建From URI: sip:device_id@domain
-    std::string from_uri = "sip:" + config.device_id + "@" + config.sip_server_domain;
+    std::string from_uri = "sip:" + config.device_id + "@" + config.sip_server_domain + transport_param;
     
     // 构建To URI: sip:server_id@domain (如果server_id为空，使用device_id)
     std::string server_id = config.sip_server_id.empty() ? config.device_id : config.sip_server_id;
-    std::string to_uri = "sip:" + server_id + "@" + config.sip_server_domain;
+    std::string to_uri = "sip:" + server_id + "@" + config.sip_server_domain + transport_param;
     
     // 构建Contact URI: sip:device_id@local_ip:local_port
     std::string contact_uri = "sip:" + config.device_id + "@127.0.0.1:" + 
-                              std::to_string(config.local_sip_port);
+                              std::to_string(config.local_sip_port) + transport_param;
     
     // 构建Proxy URI: sip:server_ip:server_port
     std::string proxy_uri = "sip:" + config.sip_server_ip + ":" + 
-                           std::to_string(config.sip_server_port);
+                           std::to_string(config.sip_server_port) + transport_param;
     
     // 打印调试信息
     std::cerr << "GB28181 SIP: 准备注册 - From: " << from_uri 
@@ -281,8 +301,16 @@ bool GB28181SipClient::sendHeartbeat() {
     
     osip_message_t* message = nullptr;
     
-    std::string from_uri = "sip:" + config.device_id + "@" + config.sip_server_domain;
-    std::string to_uri = "sip:" + config.sip_server_id + "@" + config.sip_server_domain;
+    // 确定传输协议参数
+    std::string transport_param = "";
+    if (config.sip_transport == "TCP" || config.sip_transport == "tcp") {
+        transport_param = ";transport=tcp";
+    } else {
+        transport_param = ";transport=udp";
+    }
+    
+    std::string from_uri = "sip:" + config.device_id + "@" + config.sip_server_domain + transport_param;
+    std::string to_uri = "sip:" + config.sip_server_id + "@" + config.sip_server_domain + transport_param;
     
     eXosip_lock(exosip_context);
     
@@ -498,8 +526,16 @@ void GB28181SipClient::respondCatalogQuery(void* evt) {
     // 构建目录响应
     osip_message_t* message = nullptr;
     
-    std::string from_uri = "sip:" + config.device_id + "@" + config.sip_server_domain;
-    std::string to_uri = "sip:" + config.sip_server_id + "@" + config.sip_server_domain;
+    // 确定传输协议参数
+    std::string transport_param = "";
+    if (config.sip_transport == "TCP" || config.sip_transport == "tcp") {
+        transport_param = ";transport=tcp";
+    } else {
+        transport_param = ";transport=udp";
+    }
+    
+    std::string from_uri = "sip:" + config.device_id + "@" + config.sip_server_domain + transport_param;
+    std::string to_uri = "sip:" + config.sip_server_id + "@" + config.sip_server_domain + transport_param;
     
     eXosip_lock(exosip_context);
     
@@ -569,8 +605,16 @@ void GB28181SipClient::respondDeviceInfo(void* evt) {
     // 构建设备信息响应
     osip_message_t* message = nullptr;
     
-    std::string from_uri = "sip:" + config.device_id + "@" + config.sip_server_domain;
-    std::string to_uri = "sip:" + config.sip_server_id + "@" + config.sip_server_domain;
+    // 确定传输协议参数
+    std::string transport_param = "";
+    if (config.sip_transport == "TCP" || config.sip_transport == "tcp") {
+        transport_param = ";transport=tcp";
+    } else {
+        transport_param = ";transport=udp";
+    }
+    
+    std::string from_uri = "sip:" + config.device_id + "@" + config.sip_server_domain + transport_param;
+    std::string to_uri = "sip:" + config.sip_server_id + "@" + config.sip_server_domain + transport_param;
     
     eXosip_lock(exosip_context);
     
@@ -622,8 +666,16 @@ void GB28181SipClient::respondDeviceStatus(void* evt) {
     // 构建设备状态响应
     osip_message_t* message = nullptr;
     
-    std::string from_uri = "sip:" + config.device_id + "@" + config.sip_server_domain;
-    std::string to_uri = "sip:" + config.sip_server_id + "@" + config.sip_server_domain;
+    // 确定传输协议参数
+    std::string transport_param = "";
+    if (config.sip_transport == "TCP" || config.sip_transport == "tcp") {
+        transport_param = ";transport=tcp";
+    } else {
+        transport_param = ";transport=udp";
+    }
+    
+    std::string from_uri = "sip:" + config.device_id + "@" + config.sip_server_domain + transport_param;
+    std::string to_uri = "sip:" + config.sip_server_id + "@" + config.sip_server_domain + transport_param;
     
     eXosip_lock(exosip_context);
     

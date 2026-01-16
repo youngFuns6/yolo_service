@@ -17,7 +17,7 @@ interface RequestInstance extends AxiosInstance {
 
 const request = axios.create({
   timeout: 20000,
-  baseURL: `http://${Config.BASE_URL_HOST}/api`,
+  baseURL: `${window.location.origin}/api`,
   headers: {
     "Content-Type": "application/json; charset=UTF-8",
   },

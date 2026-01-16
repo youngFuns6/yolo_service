@@ -4,68 +4,20 @@
 #include "channel.h"
 #include "algorithm_config.h"
 #include "gb28181_config.h"
+#include "common_utils.h"
+#include "ffmpeg_utils.h"
+#include "image_utils.h"
 #include <iostream>
 #include <chrono>
 #include <thread>
 #include <vector>
 #include <opencv2/imgproc.hpp>
 #include <opencv2/imgcodecs.hpp>
-#include "image_utils.h"
 #include <algorithm>
-#include <ctime>
-#include <iomanip>
-#include <sstream>
 #include <cstring>
 #include <cerrno>
 
 namespace detector_service {
-
-/**
- * @brief 获取当前时间字符串
- */
-std::string getCurrentTime() {
-    auto now = std::time(nullptr);
-    auto tm = *std::localtime(&now);
-    std::ostringstream oss;
-    oss << std::put_time(&tm, "%Y-%m-%d %H:%M:%S");
-    return oss.str();
-}
-
-/**
- * @brief 解码URL中的HTML实体编码
- * @param url 原始URL字符串
- * @return 解码后的URL字符串
- */
-std::string decodeUrlEntities(const std::string& url) {
-    std::string result = url;
-    
-    // 替换常见的HTML实体编码
-    // &amp; -> &
-    size_t pos = 0;
-    while ((pos = result.find("&amp;", pos)) != std::string::npos) {
-        result.replace(pos, 5, "&");
-        pos += 1;
-    }
-    
-    // 可以添加更多HTML实体解码，如：
-    // &lt; -> <
-    // &gt; -> >
-    // &quot; -> "
-    // &#39; -> '
-    
-    return result;
-}
-
-/**
- * @brief 将FFmpeg错误码转换为字符串
- * @param errnum 错误码
- * @return 错误字符串
- */
-std::string avErrorToString(int errnum) {
-    char errbuf[AV_ERROR_MAX_STRING_SIZE];
-    av_strerror(errnum, errbuf, AV_ERROR_MAX_STRING_SIZE);
-    return std::string(errbuf);
-}
 
 StreamManager::StreamManager() {
     // 注意：GB28181 SIP客户端初始化延迟到 initialize() 方法中
@@ -147,38 +99,15 @@ bool StreamManager::startAnalysis(int channel_id, std::shared_ptr<Channel> chann
     auto context = std::make_unique<StreamContext>();
     context->running = true;
     
-    // 解码URL中的HTML实体编码（如 &amp; -> &）
-    std::string decoded_url = decodeUrlEntities(channel->source_url);
-    
-    // 打开视频源 - 使用FFmpeg后端处理RTSP流
-    context->cap.open(decoded_url, cv::CAP_FFMPEG);
-    if (!context->cap.isOpened()) {
-        std::cerr << "无法打开视频源: " << decoded_url << std::endl;
-        // 更新状态为错误
-        auto& db = Database::getInstance();
-        std::string updated_at = getCurrentTime();
-        db.updateChannelStatus(channel_id, "error", updated_at);
-        return false;
-    }
-    
-    // 拉流成功，更新状态为running
-    auto& db = Database::getInstance();
-    std::string updated_at = getCurrentTime();
-    db.updateChannelStatus(channel_id, "running", updated_at);
-    
-    // 优化RTSP流设置以提升稳定性和流畅度
-    context->cap.set(cv::CAP_PROP_BUFFERSIZE, 1);  // 最小缓冲区（1帧），减少延迟，避免缓冲积压导致卡顿
-    context->cap.set(cv::CAP_PROP_FPS, channel->fps);
-    // 设置 FFmpeg 选项以优化 RTSP 流读取
-    context->cap.set(cv::CAP_PROP_FOURCC, cv::VideoWriter::fourcc('H', '2', '6', '4'));
-    
     // 先将 context 插入到 streams_ 中，确保线程启动时可以访问
     streams_[channel_id] = std::move(context);
     
-    // 启动工作线程（在插入 streams_ 之后，确保线程可以访问）
+    // 启动工作线程（在工作线程中异步打开流，避免阻塞主线程）
     streams_[channel_id]->thread = std::thread(&StreamManager::streamWorker, this,
                                                 channel_id, channel, detector);
     
+    // 立即返回，不等待流打开（避免阻塞）
+    // 流打开操作在工作线程中异步执行
     return true;
 }
 
@@ -269,6 +198,63 @@ void StreamManager::streamWorker(int channel_id, std::shared_ptr<Channel> channe
     auto& context = it->second;
     lock.unlock();  // 获取引用后释放锁，后续访问 context 的成员不需要锁（因为不会删除）
     
+    // 在工作线程中打开视频流（异步执行，不阻塞主线程）
+    // 解码URL中的HTML实体编码（如 &amp; -> &）
+    std::string decoded_url = decodeUrlEntities(channel->source_url);
+    
+    // 设置较短的超时时间，快速失败
+    const int CONNECT_TIMEOUT_MS = 5000;  // 5秒超时
+    
+    // 尝试打开视频源
+    bool opened = false;
+    int retry_count = 0;
+    const int MAX_RETRIES = 3;  // 最多重试3次
+    
+    while (!opened && retry_count < MAX_RETRIES && context->running.load()) {
+        if (retry_count > 0) {
+            std::cerr << "通道 " << channel_id << " 尝试重新连接 (第 " << retry_count << " 次)..." << std::endl;
+            std::this_thread::sleep_for(std::chrono::milliseconds(1000));  // 重试前等待1秒
+        }
+        
+        // 设置超时时间（需要在open之前设置）
+        context->cap.set(cv::CAP_PROP_OPEN_TIMEOUT_MSEC, CONNECT_TIMEOUT_MS);
+        
+        // 打开视频源 - 使用FFmpeg后端处理RTSP/RTMP流
+        context->cap.open(decoded_url, cv::CAP_FFMPEG);
+        
+        if (context->cap.isOpened()) {
+            opened = true;
+            
+            // 优化RTSP/RTMP流设置以提升稳定性和流畅度，减少延迟和丢帧
+            context->cap.set(cv::CAP_PROP_BUFFERSIZE, 1);  // 最小缓冲区（1帧），减少延迟，避免缓冲积压导致卡顿
+            context->cap.set(cv::CAP_PROP_FPS, channel->fps);
+            // 设置 FFmpeg 选项以优化流读取，减少延迟
+            context->cap.set(cv::CAP_PROP_FOURCC, cv::VideoWriter::fourcc('H', '2', '6', '4'));
+            
+            // 拉流成功，更新状态为running
+            auto& db = Database::getInstance();
+            std::string updated_at = getCurrentTime();
+            db.updateChannelStatus(channel_id, "running", updated_at);
+            std::cerr << "通道 " << channel_id << " 成功打开视频源: " << decoded_url << std::endl;
+        } else {
+            retry_count++;
+            if (retry_count < MAX_RETRIES) {
+                std::cerr << "通道 " << channel_id << " 打开视频源失败，将重试: " << decoded_url << std::endl;
+            } else {
+                std::cerr << "通道 " << channel_id << " 无法打开视频源（已重试 " << MAX_RETRIES << " 次）: " << decoded_url << std::endl;
+                // 更新状态为错误
+                auto& db = Database::getInstance();
+                std::string updated_at = getCurrentTime();
+                db.updateChannelStatus(channel_id, "error", updated_at);
+                return;  // 打开失败，退出工作线程
+            }
+        }
+    }
+    
+    if (!opened) {
+        return;  // 无法打开流，退出工作线程
+    }
+    
     // 加载通道的算法配置
     {
         std::lock_guard<std::mutex> config_lock(context->config_mutex);
@@ -306,8 +292,7 @@ void StreamManager::streamWorker(int channel_id, std::shared_ptr<Channel> channe
     
     cv::Mat frame, processed_frame;
     
-    // 计算帧间隔
-    int frame_interval = 1000 / channel->fps;
+    // 帧率控制：使用高精度时间戳
     auto last_time = std::chrono::steady_clock::now();
     
     // 帧跳过机制：不是每一帧都进行检测，降低处理负担
@@ -327,7 +312,7 @@ void StreamManager::streamWorker(int channel_id, std::shared_ptr<Channel> channe
     // 重连辅助函数（lambda）
     auto reconnectStream = [&]() -> bool {
         std::cerr << "通道 " << channel_id << " 连续读取失败 " << consecutive_failures 
-                  << " 次，尝试重新连接RTSP流..." << std::endl;
+                  << " 次，尝试重新连接流..." << std::endl;
         
         // 释放当前连接
         context->cap.release();
@@ -337,7 +322,11 @@ void StreamManager::streamWorker(int channel_id, std::shared_ptr<Channel> channe
         
         // 解码URL并尝试重新打开流
         std::string decoded_url = decodeUrlEntities(channel->source_url);
+        
+        // 设置超时时间（5秒），快速失败
+        context->cap.set(cv::CAP_PROP_OPEN_TIMEOUT_MSEC, CONNECT_TIMEOUT_MS);
         context->cap.open(decoded_url, cv::CAP_FFMPEG);
+        
         if (context->cap.isOpened()) {
             // 重新设置参数
             context->cap.set(cv::CAP_PROP_BUFFERSIZE, 1);  // 最小缓冲区，避免缓冲积压
@@ -348,9 +337,10 @@ void StreamManager::streamWorker(int channel_id, std::shared_ptr<Channel> channe
             auto& db = Database::getInstance();
             std::string updated_at = getCurrentTime();
             db.updateChannelStatus(channel_id, "running", updated_at);
+            std::cerr << "通道 " << channel_id << " 重连成功" << std::endl;
             return true;
         } else {
-            std::cerr << "通道 " << channel_id << " RTSP流重连失败: " 
+            std::cerr << "通道 " << channel_id << " 流重连失败: " 
                       << decoded_url << std::endl;
             // 更新状态为error
             auto& db = Database::getInstance();
@@ -456,14 +446,17 @@ void StreamManager::streamWorker(int channel_id, std::shared_ptr<Channel> channe
             }
         }
         
-        // 控制帧率
+        // 精确控制帧率，使用高精度时间控制
         auto current_time = std::chrono::steady_clock::now();
-        auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
+        auto elapsed = std::chrono::duration_cast<std::chrono::microseconds>(
             current_time - last_time).count();
         
-        if (elapsed < frame_interval) {
+        // 计算应该等待的时间（微秒）
+        int64_t frame_interval_us = (1000000LL / channel->fps);
+        if (elapsed < frame_interval_us) {
+            // 使用微秒级精度控制，减少时间误差
             std::this_thread::sleep_for(
-                std::chrono::milliseconds(frame_interval - elapsed));
+                std::chrono::microseconds(frame_interval_us - elapsed));
         }
         
         last_time = std::chrono::steady_clock::now();

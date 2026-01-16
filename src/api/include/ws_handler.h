@@ -87,6 +87,14 @@ private:
     std::map<int, FrameData> latest_frames_;
     std::mutex latest_frames_mutex_;
     
+    // 每个通道的帧率控制信息
+    struct ChannelFpsControl {
+        int fps;  // 通道帧率
+        std::chrono::steady_clock::time_point last_send_time;  // 上次发送时间
+    };
+    std::map<int, ChannelFpsControl> channel_fps_controls_;
+    std::mutex channel_fps_controls_mutex_;
+    
     std::string alertToJson(const AlertMessage& alert);
     std::string frameToJson(int channel_id, const cv::Mat& frame);
 };

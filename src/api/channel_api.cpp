@@ -1,4 +1,5 @@
 #include "channel_api.h"
+#include "channel_utils.h"
 #include "yolov11_detector.h"
 #include "stream_manager.h"
 #include "config.h"
@@ -7,24 +8,6 @@
 #include <sstream>
 
 namespace detector_service {
-
-std::string channelStatusToString(ChannelStatus status) {
-    switch (status) {
-        case ChannelStatus::IDLE: return "idle";
-        case ChannelStatus::RUNNING: return "running";
-        case ChannelStatus::ERROR: return "error";
-        case ChannelStatus::STOPPED: return "stopped";
-        default: return "unknown";
-    }
-}
-
-ChannelStatus stringToChannelStatus(const std::string& str) {
-    if (str == "idle") return ChannelStatus::IDLE;
-    if (str == "running") return ChannelStatus::RUNNING;
-    if (str == "error") return ChannelStatus::ERROR;
-    if (str == "stopped") return ChannelStatus::STOPPED;
-    return ChannelStatus::IDLE;
-}
 
 void setupChannelRoutes(crow::SimpleApp& app,
                        std::shared_ptr<YOLOv11Detector> detector,

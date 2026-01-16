@@ -1,7 +1,14 @@
 # 检测器库 (libdetector) - YOLOv11 检测器
-add_library(detector SHARED
-    yolov11_detector.cpp
-)
+# 如果启用完全静态链接，使用静态库；否则使用共享库
+if(STATIC_LINK_ALL)
+    add_library(detector STATIC
+        yolov11_detector.cpp
+    )
+else()
+    add_library(detector SHARED
+        yolov11_detector.cpp
+    )
+endif()
 
 target_include_directories(detector PUBLIC
     ${CMAKE_SOURCE_DIR}/src

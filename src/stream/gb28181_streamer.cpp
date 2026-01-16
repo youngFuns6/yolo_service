@@ -1,18 +1,10 @@
 #include "gb28181_streamer.h"
+#include "ffmpeg_utils.h"
 #include <iostream>
 #include <sstream>
 #include <iomanip>
 
 namespace detector_service {
-
-/**
- * @brief 将FFmpeg错误码转换为字符串
- */
-static std::string avErrorToString(int errnum) {
-    char errbuf[AV_ERROR_MAX_STRING_SIZE];
-    av_strerror(errnum, errbuf, AV_ERROR_MAX_STRING_SIZE);
-    return std::string(errbuf);
-}
 
 bool GB28181Streamer::initialize(const GB28181Config& config,
                                  int width, int height, int fps,

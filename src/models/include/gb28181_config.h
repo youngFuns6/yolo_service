@@ -33,6 +33,7 @@ struct GB28181Config {
     
     std::string stream_mode;                // 流模式：PS或H264，默认PS
     int max_channels;                       // 最大通道数，默认32
+    std::string sip_transport;              // SIP传输协议：TCP或UDP，默认UDP
     
     GB28181Config() 
         : enabled(false),
@@ -44,7 +45,8 @@ struct GB28181Config {
           heartbeat_count(3),
           register_expires(3600),
           stream_mode("PS"),
-          max_channels(32) {}
+          max_channels(32),
+          sip_transport("UDP") {}
     
     // 拷贝构造函数，处理atomic成员
     GB28181Config(const GB28181Config& other)
@@ -65,7 +67,8 @@ struct GB28181Config {
           heartbeat_count(other.heartbeat_count),
           register_expires(other.register_expires),
           stream_mode(other.stream_mode),
-          max_channels(other.max_channels) {}
+          max_channels(other.max_channels),
+          sip_transport(other.sip_transport) {}
     
     // 拷贝赋值运算符，处理atomic成员
     GB28181Config& operator=(const GB28181Config& other) {
@@ -84,10 +87,11 @@ struct GB28181Config {
             rtp_port_start = other.rtp_port_start;
             rtp_port_end = other.rtp_port_end;
             heartbeat_interval = other.heartbeat_interval;
-            heartbeat_count = other.heartbeat_count;
-            register_expires = other.register_expires;
-            stream_mode = other.stream_mode;
-            max_channels = other.max_channels;
+          heartbeat_count = other.heartbeat_count;
+          register_expires = other.register_expires;
+          stream_mode = other.stream_mode;
+          max_channels = other.max_channels;
+          sip_transport = other.sip_transport;
         }
         return *this;
     }

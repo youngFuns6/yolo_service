@@ -48,3 +48,18 @@ set_target_properties(${PROJECT_NAME} PROPERTIES
     RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/bin
 )
 
+# Linux 静态链接配置 - 解决 GLIBC 版本不匹配问题
+if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+    # 静态链接 libgcc 和 libstdc++，避免 GLIBC 版本问题
+    target_link_options(${PROJECT_NAME} PRIVATE
+        -static-libgcc
+        -static-libstdc++
+    )
+    
+    # 如果启用了完全静态链接选项，添加 -static
+    if(STATIC_LINK_ALL)
+        message(STATUS "为 ${PROJECT_NAME} 启用完全静态链接")
+        target_link_options(${PROJECT_NAME} PRIVATE -static)
+    endif()
+endif()
+

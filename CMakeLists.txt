@@ -59,6 +59,30 @@ endif()
 set(CMAKE_LIBRARY_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/lib)
 set(CMAKE_ARCHIVE_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/lib)
 
+# 静态链接配置 - 解决 GLIBC 版本不匹配问题
+# 选项：是否启用完全静态链接（包括 libc 和 libm）
+# 注意：完全静态链接需要将所有共享库也改为静态库
+option(STATIC_LINK_ALL "Enable fully static linking (including libc and libm)" OFF)
+
+# 对于 Linux 系统，启用静态链接
+if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+    # 默认静态链接 libgcc 和 libstdc++，避免 GLIBC 版本问题
+    set(CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} -static-libgcc -static-libstdc++")
+    set(CMAKE_SHARED_LINKER_FLAGS "${CMAKE_SHARED_LINKER_FLAGS} -static-libgcc -static-libstdc++")
+    
+    # 如果启用完全静态链接，添加 -static 选项
+    # 注意：启用完全静态链接时，所有共享库（utils, models, database, detector）会自动改为静态库
+    if(STATIC_LINK_ALL)
+        message(STATUS "Enabling fully static linking (including libc and libm)")
+        message(STATUS "All shared libraries will be built as static libraries")
+        set(CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} -static")
+        # 注意：完全静态链接可能导致某些系统功能不可用，且文件较大
+    else()
+        message(STATUS "Using partial static linking (libgcc and libstdc++ only)")
+        message(STATUS "To enable fully static linking, use: cmake -DSTATIC_LINK_ALL=ON")
+    endif()
+endif()
+
 # vcpkg 配置
 # 注意：CMAKE_TOOLCHAIN_FILE 应该通过命令行参数在 project() 之前设置
 # 这里只用于信息显示和确保 VCPKG_TARGET_TRIPLET 被缓存

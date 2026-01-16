@@ -74,6 +74,9 @@ void setupGB28181ConfigRoutes(crow::SimpleApp& app) {
             if (json_body.has("max_channels")) {
                 config.max_channels = json_body["max_channels"].i();
             }
+            if (json_body.has("sip_transport")) {
+                config.sip_transport = json_body["sip_transport"].s();
+            }
             
             // 保存到数据库
             bool success = gb28181_config_mgr.saveGB28181Config(config);
@@ -115,6 +118,7 @@ void setupGB28181ConfigRoutes(crow::SimpleApp& app) {
         response["register_expires"] = config.register_expires;
         response["stream_mode"] = config.stream_mode;
         response["max_channels"] = config.max_channels;
+        response["sip_transport"] = config.sip_transport;
         
         return crow::response(response);
     });

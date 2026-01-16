@@ -10,6 +10,7 @@ import {
 function GB28181ConfigPage() {
   const [loading, setLoading] = useState(false);
   const [streamMode, setStreamMode] = useState<"PS" | "H264">("PS");
+  const [sipTransport, setSipTransport] = useState<"TCP" | "UDP">("UDP");
 
   const [initialValues, setInitialValues] = useState<Partial<GB28181Config>>({
     enabled: false,
@@ -30,6 +31,7 @@ function GB28181ConfigPage() {
     register_expires: 3600,
     stream_mode: "PS",
     max_channels: 32,
+    sip_transport: "UDP",
   });
 
   // 加载配置
@@ -57,8 +59,10 @@ function GB28181ConfigPage() {
             register_expires: response.register_expires || 3600,
             stream_mode: response.stream_mode || "PS",
             max_channels: response.max_channels || 32,
+            sip_transport: response.sip_transport || "UDP",
           };
           setStreamMode((values.stream_mode as "PS" | "H264") || "PS");
+          setSipTransport((values.sip_transport as "TCP" | "UDP") || "UDP");
           setInitialValues(values);
         } else {
           message.error("获取配置失败");
@@ -98,6 +102,7 @@ function GB28181ConfigPage() {
       register_expires: values.register_expires || 3600,
       stream_mode: streamMode,
       max_channels: values.max_channels || 32,
+      sip_transport: sipTransport,
     };
 
     return updateGB28181Config(submitValues)
@@ -164,6 +169,21 @@ function GB28181ConfigPage() {
               style: { width: "100%" },
             }}
           />
+          <ProForm.Item
+            name="sip_transport"
+            label="SIP 传输协议"
+            tooltip="选择TCP或UDP传输协议，默认UDP"
+          >
+            <Radio.Group
+              value={sipTransport}
+              onChange={(e) => {
+                setSipTransport(e.target.value);
+              }}
+            >
+              <Radio value="UDP">UDP</Radio>
+              <Radio value="TCP">TCP</Radio>
+            </Radio.Group>
+          </ProForm.Item>
           <ProFormText
             name="sip_server_id"
             label="SIP 服务器 ID"

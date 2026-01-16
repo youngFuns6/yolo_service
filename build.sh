@@ -24,6 +24,7 @@ CUSTOM_TRIPLET=""
 CLEAN=false
 JOBS=$(nproc 2>/dev/null || echo 4)
 NO_PROXY=false
+STATIC_LINK_ALL=false
 
 # 显示帮助信息
 show_help() {
@@ -39,6 +40,7 @@ show_help() {
     -c, --clean                  清理构建目录
     -j, --jobs N                 并行编译任务数 [默认: CPU核心数]
     --no-proxy                   禁用代理（用于 vcpkg 下载）
+    --static                     启用完全静态链接（包括 libc 和 libm，解决 GLIBC 版本问题）
     -h, --help                   显示此帮助信息
 
 平台和架构组合示例:
@@ -52,6 +54,7 @@ show_help() {
     $0                          # Linux x64 Release
     $0 -p windows -a x64        # Windows x64 Release
     $0 -p linux -a arm64 -t Debug  # Linux ARM64 Debug
+    $0 -p linux -a arm64 --static  # Linux ARM64 完全静态链接（解决 GLIBC 版本问题）
     $0 -c                       # 清理构建目录
 EOF
 }
@@ -82,6 +85,10 @@ parse_args() {
                 ;;
             --no-proxy)
                 NO_PROXY=true
+                shift
+                ;;
+            --static)
+                STATIC_LINK_ALL=true
                 shift
                 ;;
             -h|--help)
@@ -493,14 +500,27 @@ configure_cmake() {
                 echo -e "${YELLOW}检测到 Linux ARM64 交叉编译环境${NC}"
                 
                 # 检查 ARM64 交叉编译工具链是否安装
-                if command -v aarch64-linux-gnu-g++ >/dev/null 2>&1; then
+                # 检查默认版本或带版本号的编译器（gcc-11, gcc-12, gcc-13 等）
+                if command -v aarch64-linux-gnu-g++ >/dev/null 2>&1 || \
+                   command -v aarch64-linux-gnu-g++-11 >/dev/null 2>&1 || \
+                   command -v aarch64-linux-gnu-g++-12 >/dev/null 2>&1 || \
+                   command -v aarch64-linux-gnu-g++-13 >/dev/null 2>&1; then
                     echo -e "${GREEN}找到 ARM64 交叉编译工具链${NC}"
                     # 禁用 cairo 的 x11 功能以避免交叉编译时的头文件冲突
                     export VCPKG_CAIRO_FEATURES=""
                     # 注意：不设置全局 CC/CXX 环境变量，避免影响 vcpkg 构建 x64-linux 工具包
                     # 只通过 CMake 参数指定目标架构的编译器
                     # 获取交叉编译工具链的 sysroot 路径
-                    SYSROOT=$(aarch64-linux-gnu-gcc -print-sysroot 2>/dev/null || echo "")
+                    # 尝试使用找到的编译器版本获取 sysroot
+                    if command -v aarch64-linux-gnu-gcc-11 >/dev/null 2>&1; then
+                        SYSROOT=$(aarch64-linux-gnu-gcc-11 -print-sysroot 2>/dev/null || echo "")
+                    elif command -v aarch64-linux-gnu-gcc-12 >/dev/null 2>&1; then
+                        SYSROOT=$(aarch64-linux-gnu-gcc-12 -print-sysroot 2>/dev/null || echo "")
+                    elif command -v aarch64-linux-gnu-gcc-13 >/dev/null 2>&1; then
+                        SYSROOT=$(aarch64-linux-gnu-gcc-13 -print-sysroot 2>/dev/null || echo "")
+                    else
+                        SYSROOT=$(aarch64-linux-gnu-gcc -print-sysroot 2>/dev/null || echo "")
+                    fi
                     # 查找 ARM64 系统库路径
                     ARM64_LIB_PATH="/usr/aarch64-linux-gnu/lib"
                     if [ ! -d "$ARM64_LIB_PATH" ]; then
@@ -513,12 +533,28 @@ configure_cmake() {
                         fi
                     fi
                     
-                    # 动态查找工具链工具的绝对路径
-                    AR_TOOL=$(which aarch64-linux-gnu-ar 2>/dev/null || echo "/usr/bin/aarch64-linux-gnu-ar")
-                    RANLIB_TOOL=$(which aarch64-linux-gnu-ranlib 2>/dev/null || echo "/usr/bin/aarch64-linux-gnu-ranlib")
-                    STRIP_TOOL=$(which aarch64-linux-gnu-strip 2>/dev/null || echo "/usr/bin/aarch64-linux-gnu-strip")
-                    CC_TOOL=$(which aarch64-linux-gnu-gcc 2>/dev/null || echo "aarch64-linux-gnu-gcc")
-                    CXX_TOOL=$(which aarch64-linux-gnu-g++ 2>/dev/null || echo "aarch64-linux-gnu-g++")
+                    # 动态查找工具链工具
+                    # 优先使用 GCC 11 版本（满足 onnxruntime 的 GCC >= 11.1 要求，且与 GLIBC 2.31 兼容）
+                    if command -v aarch64-linux-gnu-gcc-11 >/dev/null 2>&1; then
+                        CC_TOOL="aarch64-linux-gnu-gcc-11"
+                        CXX_TOOL="aarch64-linux-gnu-g++-11"
+                        echo -e "${BLUE}使用 GCC 11 版本的交叉编译器（与 GLIBC 2.31 兼容）${NC}"
+                    elif command -v aarch64-linux-gnu-gcc-12 >/dev/null 2>&1; then
+                        CC_TOOL="aarch64-linux-gnu-gcc-12"
+                        CXX_TOOL="aarch64-linux-gnu-g++-12"
+                        echo -e "${YELLOW}使用 GCC 12 版本（可能需要较新的 GLIBC）${NC}"
+                    elif command -v aarch64-linux-gnu-gcc-13 >/dev/null 2>&1; then
+                        CC_TOOL="aarch64-linux-gnu-gcc-13"
+                        CXX_TOOL="aarch64-linux-gnu-g++-13"
+                        echo -e "${YELLOW}使用 GCC 13 版本（需要 GLIBC 2.34+，可能不兼容）${NC}"
+                    else
+                        CC_TOOL=$(which aarch64-linux-gnu-gcc 2>/dev/null || echo "aarch64-linux-gnu-gcc")
+                        CXX_TOOL=$(which aarch64-linux-gnu-g++ 2>/dev/null || echo "aarch64-linux-gnu-g++")
+                        echo -e "${BLUE}使用默认交叉编译器: $CC_TOOL${NC}"
+                    fi
+                    AR_TOOL=$(which aarch64-linux-gnu-ar 2>/dev/null || echo "aarch64-linux-gnu-ar")
+                    RANLIB_TOOL=$(which aarch64-linux-gnu-ranlib 2>/dev/null || echo "aarch64-linux-gnu-ranlib")
+                    STRIP_TOOL=$(which aarch64-linux-gnu-strip 2>/dev/null || echo "aarch64-linux-gnu-strip")
                     
                     # 保存原始的 CC/CXX 环境变量（用于 vcpkg 构建 host tools）
                     # 确保 vcpkg 在构建 x64-linux 工具包时使用本地编译器
@@ -538,6 +574,26 @@ configure_cmake() {
                     # 保存原生编译器路径，用于 vcpkg 构建 host triplet 包
                     NATIVE_CC=$(which gcc 2>/dev/null || echo "gcc")
                     NATIVE_CXX=$(which g++ 2>/dev/null || echo "g++")
+                    
+                    # 设置交叉编译器的环境变量，确保 vcpkg 在 detect_compiler 阶段能找到编译器
+                    # vcpkg 在检测编译器时会读取这些环境变量
+                    export CMAKE_C_COMPILER="$CC_TOOL"
+                    export CMAKE_CXX_COMPILER="$CXX_TOOL"
+                    export CMAKE_AR="$AR_TOOL"
+                    export CMAKE_RANLIB="$RANLIB_TOOL"
+                    export CMAKE_STRIP="$STRIP_TOOL"
+                    
+                    # 注意：不要设置全局 CC/CXX 环境变量，因为它们会影响 vcpkg 检测 host triplet
+                    # 只设置 CMAKE_C_COMPILER 等 CMake 特定的环境变量
+                    # vcpkg 在检测 target triplet 时会读取 CMAKE_C_COMPILER 环境变量
+                    export CMAKE_C_COMPILER="$CC_TOOL"
+                    export CMAKE_CXX_COMPILER="$CXX_TOOL"
+                    export CMAKE_AR="$AR_TOOL"
+                    export CMAKE_RANLIB="$RANLIB_TOOL"
+                    export CMAKE_STRIP="$STRIP_TOOL"
+                    
+                    # 编译器名称已在 PATH 中，不需要额外添加目录
+                    echo -e "${BLUE}设置交叉编译器环境变量: CMAKE_C_COMPILER=$CMAKE_C_COMPILER, CMAKE_CXX_COMPILER=$CMAKE_CXX_COMPILER${NC}"
                     
                     # 设置交叉编译器的 CMake 变量
                     # 注意：这些变量只影响目标架构的包，不影响 host triplet 包
@@ -690,17 +746,33 @@ configure_cmake() {
     # 在交叉编译时，确保 vcpkg 构建 host tools 时使用本地编译器
     # 这很重要，因为 vcpkg 需要构建一些工具（如 pkgconf）在主机上运行
     if [ "$ARCH" = "arm64" ] && [ "$(uname -m)" != "aarch64" ]; then
-        # 保存原始的编译器环境变量（如果存在）
-        if [ -z "$VCPKG_ORIGINAL_CC" ]; then
-            # 确保 vcpkg 在构建 host tools 时使用本地编译器
-            # 不设置全局 CC/CXX，让 vcpkg 自动检测并使用本地编译器
-            # 但通过 VCPKG_HOST_TRIPLET 明确指定 host triplet
-            HOST_ARCH=$(uname -m)
-            if [ "$HOST_ARCH" = "x86_64" ]; then
-                export VCPKG_HOST_TRIPLET="x64-linux"
-                echo -e "${BLUE}设置 VCPKG_HOST_TRIPLET=x64-linux（确保工具包使用本地编译器）${NC}"
-            fi
+        # 确保 vcpkg 在构建 host tools 时使用本地编译器
+        # 清除可能影响 host triplet 检测的环境变量
+        if [ -n "$CC" ] && echo "$CC" | grep -q "aarch64"; then
+            echo -e "${YELLOW}警告: 检测到 CC 环境变量指向 ARM64 交叉编译器，临时清除以检测 host triplet${NC}"
+            unset CC
         fi
+        if [ -n "$CXX" ] && echo "$CXX" | grep -q "aarch64"; then
+            echo -e "${YELLOW}警告: 检测到 CXX 环境变量指向 ARM64 交叉编译器，临时清除以检测 host triplet${NC}"
+            unset CXX
+        fi
+        # 明确设置 host 编译器环境变量
+        HOST_ARCH=$(uname -m)
+        if [ "$HOST_ARCH" = "x86_64" ]; then
+            export VCPKG_HOST_CC="gcc"
+            export VCPKG_HOST_CXX="g++"
+            echo -e "${BLUE}设置 VCPKG_HOST_CC/VCPKG_HOST_CXX 为本地编译器（用于 host triplet）${NC}"
+        fi
+    fi
+    
+    # 添加静态链接选项（如果启用）
+    if [ "$STATIC_LINK_ALL" = true ]; then
+        CMAKE_ARGS+=(-DSTATIC_LINK_ALL=ON)
+        echo -e "${GREEN}启用完全静态链接（包括 libc 和 libm）${NC}"
+        echo -e "${YELLOW}注意: 完全静态链接会产生较大的可执行文件，但可以解决 GLIBC 版本不匹配问题${NC}"
+    else
+        echo -e "${BLUE}使用部分静态链接（libgcc 和 libstdc++ 静态链接，系统库动态链接）${NC}"
+        echo -e "${BLUE}提示: 如需完全静态链接，请使用 --static 选项${NC}"
     fi
     
     # 运行 CMake，并将输出同时显示和保存到日志

@@ -5,6 +5,7 @@
 #include <nlohmann/json.hpp>
 #include <iostream>
 #include "image_utils.h"
+#include "channel.h"
 
 namespace detector_service {
 
@@ -44,10 +45,14 @@ void WebSocketHandler::handleDisconnection(crow::websocket::connection& conn) {
     if (it != connections_.end()) {
         // 如果是通道订阅，从通道订阅列表中移除
         if (it->second.type == ConnectionType::CHANNEL && it->second.channel_id >= 0) {
-            auto& channel_conns = channel_subscriptions_[it->second.channel_id];
+            int channel_id = it->second.channel_id;
+            auto& channel_conns = channel_subscriptions_[channel_id];
             channel_conns.erase(&conn);
             if (channel_conns.empty()) {
-                channel_subscriptions_.erase(it->second.channel_id);
+                channel_subscriptions_.erase(channel_id);
+                // 清理该通道的FPS控制信息（如果没有订阅者了）
+                std::lock_guard<std::mutex> fps_lock(channel_fps_controls_mutex_);
+                channel_fps_controls_.erase(channel_id);
             }
         }
         connections_.erase(it);
@@ -129,14 +134,32 @@ void WebSocketHandler::broadcastFrame(int channel_id, const cv::Mat& frame) {
         latest_frames_[channel_id] = std::move(frame_data);
     }
     
+    // 初始化或更新通道的FPS控制信息
+    {
+        std::lock_guard<std::mutex> fps_lock(channel_fps_controls_mutex_);
+        auto& channel_manager = ChannelManager::getInstance();
+        auto channel = channel_manager.getChannel(channel_id);
+        if (channel) {
+            auto it = channel_fps_controls_.find(channel_id);
+            if (it == channel_fps_controls_.end()) {
+                // 首次初始化
+                ChannelFpsControl control;
+                control.fps = channel->fps > 0 ? channel->fps : 25;  // 默认25fps
+                control.last_send_time = std::chrono::steady_clock::now();
+                channel_fps_controls_[channel_id] = control;
+            } else {
+                // 更新FPS（如果通道配置改变）
+                it->second.fps = channel->fps > 0 ? channel->fps : 25;
+            }
+        }
+    }
+    
     // 通知发送线程有新帧
     frame_queue_cv_.notify_one();
 }
 
 void WebSocketHandler::sendWorker() {
-    // 移除帧率限制，立即发送最新帧以减少延迟
-    // 如果需要限制帧率，可以通过检测间隔来控制
-    auto last_send_time = std::chrono::steady_clock::now();
+    // 添加帧率控制，根据通道FPS限制发送频率，避免浏览器来不及渲染
     
     while (running_) {
         std::unique_lock<std::mutex> lock(latest_frames_mutex_);
@@ -155,7 +178,7 @@ void WebSocketHandler::sendWorker() {
         latest_frames_.clear();  // 清空，等待新帧
         lock.unlock();
         
-        // 发送每个通道的最新帧
+        // 发送每个通道的最新帧（带帧率控制）
         for (const auto& pair : frames_to_send) {
             int channel_id = pair.first;
             const FrameData& frame_data = pair.second;
@@ -166,6 +189,28 @@ void WebSocketHandler::sendWorker() {
                 auto it = channel_subscriptions_.find(channel_id);
                 if (it == channel_subscriptions_.end() || it->second.empty()) {
                     continue;  // 没有订阅者，跳过编码和发送
+                }
+            }
+            
+            // 帧率控制：检查是否应该发送这一帧
+            {
+                std::lock_guard<std::mutex> fps_lock(channel_fps_controls_mutex_);
+                auto fps_it = channel_fps_controls_.find(channel_id);
+                if (fps_it != channel_fps_controls_.end()) {
+                    auto now = std::chrono::steady_clock::now();
+                    auto elapsed = std::chrono::duration_cast<std::chrono::microseconds>(
+                        now - fps_it->second.last_send_time).count();
+                    
+                    // 计算帧间隔（微秒）
+                    int64_t frame_interval_us = 1000000LL / fps_it->second.fps;
+                    
+                    // 如果距离上次发送时间太短，跳过这一帧（丢帧以保持流畅）
+                    if (elapsed < frame_interval_us) {
+                        continue;  // 跳过这一帧，等待下一帧
+                    }
+                    
+                    // 更新上次发送时间
+                    fps_it->second.last_send_time = now;
                 }
             }
             
@@ -206,8 +251,6 @@ void WebSocketHandler::sendWorker() {
                 channel_subscriptions_.erase(it);
             }
         }
-        
-        last_send_time = std::chrono::steady_clock::now();
     }
 }
 

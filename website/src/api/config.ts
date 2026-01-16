@@ -25,6 +25,7 @@ export interface GB28181Config {
   register_expires: number;
   stream_mode: "PS" | "H264";
   max_channels: number;
+  sip_transport: "TCP" | "UDP";
 }
 
 /**

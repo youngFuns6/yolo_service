@@ -1,38 +1,11 @@
 #include "channel.h"
+#include "channel_utils.h"
+#include "common_utils.h"
 #include "database.h"
 #include <algorithm>
-#include <ctime>
-#include <iomanip>
 #include <iostream>
-#include <sstream>
 
 namespace detector_service {
-
-std::string getCurrentTime() {
-    auto now = std::time(nullptr);
-    auto tm = *std::localtime(&now);
-    std::ostringstream oss;
-    oss << std::put_time(&tm, "%Y-%m-%d %H:%M:%S");
-    return oss.str();
-}
-
-std::string channelStatusToString(ChannelStatus status) {
-    switch (status) {
-        case ChannelStatus::IDLE: return "idle";
-        case ChannelStatus::RUNNING: return "running";
-        case ChannelStatus::ERROR: return "error";
-        case ChannelStatus::STOPPED: return "stopped";
-        default: return "unknown";
-    }
-}
-
-ChannelStatus stringToChannelStatus(const std::string& str) {
-    if (str == "idle") return ChannelStatus::IDLE;
-    if (str == "running") return ChannelStatus::RUNNING;
-    if (str == "error") return ChannelStatus::ERROR;
-    if (str == "stopped") return ChannelStatus::STOPPED;
-    return ChannelStatus::IDLE;
-}
 
 int ChannelManager::createChannel(const Channel& channel) {
     auto& db = Database::getInstance();
