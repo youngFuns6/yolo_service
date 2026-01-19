@@ -1,0 +1,9 @@
+// 兼容层：将 <optional> 重定向到我们的兼容实现
+// 这个文件会被放在编译器搜索路径的前面，优先于系统头文件
+#pragma once
+
+#include "../include/optional_compat.h"
+
+// 确保 std::optional 在 std 命名空间中可用
+// optional_compat.h 已经处理了这个问题
+

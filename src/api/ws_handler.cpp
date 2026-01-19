@@ -23,31 +23,31 @@ WebSocketHandler::~WebSocketHandler() {
     }
 }
 
-void WebSocketHandler::handleChannelConnection(crow::websocket::connection& conn) {
+void WebSocketHandler::handleChannelConnection(httplib::WebSocket* conn) {
     std::lock_guard<std::mutex> lock(connections_mutex_);
     ConnectionInfo info;
     info.type = ConnectionType::CHANNEL;
     info.channel_id = -1;  // 初始值，等待客户端订阅
-    connections_[&conn] = info;
+    connections_[conn] = info;
 }
 
-void WebSocketHandler::handleAlertConnection(crow::websocket::connection& conn) {
+void WebSocketHandler::handleAlertConnection(httplib::WebSocket* conn) {
     std::lock_guard<std::mutex> lock(connections_mutex_);
     ConnectionInfo info;
     info.type = ConnectionType::ALERT;
     info.channel_id = -1;
-    connections_[&conn] = info;
+    connections_[conn] = info;
 }
 
-void WebSocketHandler::handleDisconnection(crow::websocket::connection& conn) {
+void WebSocketHandler::handleDisconnection(httplib::WebSocket* conn) {
     std::lock_guard<std::mutex> lock(connections_mutex_);
-    auto it = connections_.find(&conn);
+    auto it = connections_.find(conn);
     if (it != connections_.end()) {
         // 如果是通道订阅，从通道订阅列表中移除
         if (it->second.type == ConnectionType::CHANNEL && it->second.channel_id >= 0) {
             int channel_id = it->second.channel_id;
             auto& channel_conns = channel_subscriptions_[channel_id];
-            channel_conns.erase(&conn);
+            channel_conns.erase(conn);
             if (channel_conns.empty()) {
                 channel_subscriptions_.erase(channel_id);
                 // 清理该通道的FPS控制信息（如果没有订阅者了）
@@ -59,7 +59,7 @@ void WebSocketHandler::handleDisconnection(crow::websocket::connection& conn) {
     }
 }
 
-void WebSocketHandler::handleChannelMessage(crow::websocket::connection& conn, 
+void WebSocketHandler::handleChannelMessage(httplib::WebSocket* conn, 
                                             const std::string& message, 
                                             bool /* is_binary */) {
     try {
@@ -70,12 +70,12 @@ void WebSocketHandler::handleChannelMessage(crow::websocket::connection& conn,
                 int channel_id = msg["channel_id"];
                 
                 std::lock_guard<std::mutex> lock(connections_mutex_);
-                auto it = connections_.find(&conn);
+                auto it = connections_.find(conn);
                 if (it != connections_.end()) {
                     // 如果之前已订阅其他通道，先移除旧订阅
                     if (it->second.channel_id >= 0) {
                         auto& old_channel_conns = channel_subscriptions_[it->second.channel_id];
-                        old_channel_conns.erase(&conn);
+                        old_channel_conns.erase(conn);
                         if (old_channel_conns.empty()) {
                             channel_subscriptions_.erase(it->second.channel_id);
                         }
@@ -83,13 +83,13 @@ void WebSocketHandler::handleChannelMessage(crow::websocket::connection& conn,
                     
                     // 更新订阅信息
                     it->second.channel_id = channel_id;
-                    channel_subscriptions_[channel_id].insert(&conn);
+                    channel_subscriptions_[channel_id].insert(conn);
                     
                     // 发送确认消息
                     nlohmann::json response;
                     response["type"] = "subscription_confirmed";
                     response["channel_id"] = channel_id;
-                    conn.send_text(response.dump());
+                    conn->send(response.dump());
                 }
             }
         }
@@ -98,14 +98,14 @@ void WebSocketHandler::handleChannelMessage(crow::websocket::connection& conn,
     }
 }
 
-void WebSocketHandler::handleAlertMessage(crow::websocket::connection& conn, 
+void WebSocketHandler::handleAlertMessage(httplib::WebSocket* conn, 
                                          const std::string& /* message */, 
                                          bool /* is_binary */) {
     // 报警连接不需要处理消息，连接即表示订阅
     // 可以在这里发送确认消息
     nlohmann::json response;
     response["type"] = "alert_subscription_confirmed";
-    conn.send_text(response.dump());
+    conn->send(response.dump());
 }
 
 void WebSocketHandler::broadcastAlert(const AlertMessage& alert) {
@@ -115,7 +115,7 @@ void WebSocketHandler::broadcastAlert(const AlertMessage& alert) {
     for (const auto& pair : connections_) {
         if (pair.second.type == ConnectionType::ALERT && pair.first) {
             try {
-                pair.first->send_text(json);
+                pair.first->send(json);
             } catch (const std::exception& e) {
                 std::cerr << "发送报警消息失败: " << e.what() << std::endl;
             }
@@ -225,11 +225,11 @@ void WebSocketHandler::sendWorker() {
                 continue;  // 订阅者可能在编码期间断开
             }
             
-            std::vector<crow::websocket::connection*> to_remove;
+            std::vector<httplib::WebSocket*> to_remove;
             for (auto* conn : it->second) {
                 if (conn) {
                     try {
-                        conn->send_text(json);
+                        conn->send(json);
                     } catch (const std::exception& e) {
                         std::cerr << "发送帧数据失败 (通道 " << channel_id << "): " 
                                   << e.what() << std::endl;

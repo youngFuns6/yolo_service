@@ -13,6 +13,7 @@
 #include <fstream>
 #include <sstream>
 #include <filesystem>
+#include <nlohmann/json.hpp>
 
 namespace detector_service {
 
@@ -111,7 +112,7 @@ std::string getMimeType(const std::string& file_path) {
 }
 
 // 提供静态文件服务
-crow::response serveStaticFile(const std::string& file_path) {
+void serveStaticFile(const httplib::Request& req, httplib::Response& res, const std::string& file_path) {
     // 清理路径，移除前导斜杠
     std::string clean_path = file_path;
     if (!clean_path.empty() && clean_path[0] == '/') {
@@ -132,61 +133,70 @@ crow::response serveStaticFile(const std::string& file_path) {
     
     // 检查文件是否存在
     if (!std::filesystem::exists(full_path) || !std::filesystem::is_regular_file(full_path)) {
-        return crow::response(404, "File not found");
+        res.status = 404;
+        res.set_content("File not found", "text/plain");
+        return;
     }
     
     // 读取文件内容
     std::ifstream file(full_path.string(), std::ios::binary);
     if (!file.is_open()) {
-        return crow::response(500, "Failed to open file");
+        res.status = 500;
+        res.set_content("Failed to open file", "text/plain");
+        return;
     }
     
     std::stringstream buffer;
     buffer << file.rdbuf();
     std::string content = buffer.str();
     
-    // 创建响应
-    crow::response res;
-    res.code = 200;
-    res.set_header("Content-Type", getMimeType(full_path.string()));
-    res.body = content;
-    
-    return res;
+    // 设置响应
+    res.status = 200;
+    res.set_content(content, getMimeType(full_path.string()));
 }
 
-void setupAllRoutes(crow::SimpleApp& app, const AppContext& context) {
+void setupAllRoutes(httplib::Server& svr, const AppContext& context) {
     // 先设置 API 路由和 WebSocket 路由（优先级更高）
-    setupChannelRoutes(app, context.detector, context.stream_manager);
-    setupAlertRoutes(app);
-    setupReportConfigRoutes(app);
-    setupAlgorithmConfigRoutes(app);
-    setupGB28181ConfigRoutes(app);
-    setupModelRoutes(app);
-    setupWebSocketRoutes(app);
+    setupChannelRoutes(svr, context.detector, context.stream_manager);
+    setupAlertRoutes(svr);
+    setupReportConfigRoutes(svr);
+    setupAlgorithmConfigRoutes(svr);
+    setupGB28181ConfigRoutes(svr);
+    setupModelRoutes(svr);
+    setupWebSocketRoutes(svr);
     
-    // 设置根路由 - 返回 website/index.html 或 API 信息
-    CROW_ROUTE(app, "/")
-    ([]() {
-        return serveStaticFile("");
+    // 设置根路由 - 返回 website/index.html
+    svr.Get("/", [](const httplib::Request& req, httplib::Response& res) {
+        serveStaticFile(req, res, "");
     });
     
     // 设置静态文件路由 - 处理 website 目录下的所有文件（作为 fallback）
     // 注意：这个路由应该在 API 路由之后注册，这样 API 路由会优先匹配
-    CROW_ROUTE(app, "/<path>")
-    ([](const crow::request& req, const std::string& path) {
+    svr.Get(R"(/.*)", [](const httplib::Request& req, httplib::Response& res) {
+        std::string path = req.path;
         // 如果路径以 api/ 或 ws 开头，不处理（应该由 API/WebSocket 路由处理）
         // 如果这些路由没有匹配，说明路径不存在，返回 404
-        if (path.find("api/") == 0 || path == "api" || path.find("ws") == 0) {
-            return crow::response(404);
+        if (path.find("/api/") == 0 || path == "/api" || path.find("/ws") == 0) {
+            res.status = 404;
+            res.set_content("Not found", "text/plain");
+            return;
         }
         
-        return serveStaticFile(path);
+        // 移除前导斜杠
+        if (!path.empty() && path[0] == '/') {
+            path = path.substr(1);
+        }
+        
+        serveStaticFile(req, res, path);
     });
 }
 
-void startServer(crow::SimpleApp& app, const Config& config) {
+void startServer(httplib::Server& svr, const Config& config) {
     int port = config.getServerConfig().http_port;
-    app.port(port).multithreaded().run();
+    std::cout << "服务器启动在端口 " << port << std::endl;
+    if (!svr.listen("0.0.0.0", port)) {
+        std::cerr << "服务器启动失败" << std::endl;
+    }
 }
 
 void startEnabledChannels(StreamManager* stream_manager, 
@@ -225,16 +235,16 @@ int startService() {
     // 设置帧回调函数
     stream_manager.setFrameCallback(processFrameCallback);
     
-    // 创建 Crow 应用并设置路由
-    crow::SimpleApp app;
-    setupAllRoutes(app, context);
+    // 创建 HTTP 服务器并设置路由
+    httplib::Server svr;
+    setupAllRoutes(svr, context);
     
     // 启动所有已启用的通道
     startEnabledChannels(context.stream_manager, context.detector);
     
     // 启动服务器
     auto& config = Config::getInstance();
-    startServer(app, config);
+    startServer(svr, config);
     
     return 0;
 }

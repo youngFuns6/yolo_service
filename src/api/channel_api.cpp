@@ -6,46 +6,52 @@
 #include "database.h"
 #include <iostream>
 #include <sstream>
+#include <nlohmann/json.hpp>
 
 namespace detector_service {
 
-void setupChannelRoutes(crow::SimpleApp& app,
+void setupChannelRoutes(httplib::Server& svr,
                        std::shared_ptr<YOLOv11Detector> detector,
                        StreamManager* stream_manager) {
     // 创建通道
-    CROW_ROUTE(app, "/api/channels").methods("POST"_method)
-    ([detector, stream_manager](const crow::request& req) {
+    svr.Post("/api/channels", [detector, stream_manager](const httplib::Request& req, httplib::Response& res) {
         try {
-            auto json_body = crow::json::load(req.body);
-            if (!json_body) {
-                return crow::response(400, "Invalid JSON");
+            nlohmann::json json_body;
+            try {
+                json_body = nlohmann::json::parse(req.body);
+            } catch (const nlohmann::json::exception&) {
+                res.status = 400;
+                res.set_content("Invalid JSON", "text/plain");
+                return;
             }
             
             Channel channel;
-            if (json_body.has("id")) {
-                channel.id = json_body["id"].i();
+            if (json_body.contains("id")) {
+                channel.id = json_body["id"].get<int>();
             }
-            if (json_body.has("name")) {
-                channel.name = json_body["name"].s();
+            if (json_body.contains("name")) {
+                channel.name = json_body["name"].get<std::string>();
             }
-            if (json_body.has("source_url")) {
-                channel.source_url = json_body["source_url"].s();
+            if (json_body.contains("source_url")) {
+                channel.source_url = json_body["source_url"].get<std::string>();
             }
-            if (json_body.has("enabled")) {
-                channel.enabled = json_body["enabled"].b();
+            if (json_body.contains("enabled")) {
+                channel.enabled = json_body["enabled"].get<bool>();
             }
-            if (json_body.has("report_enabled")) {
-                channel.report_enabled = json_body["report_enabled"].b();
+            if (json_body.contains("report_enabled")) {
+                channel.report_enabled = json_body["report_enabled"].get<bool>();
             }
             
             auto& channel_manager = ChannelManager::getInstance();
             int channel_id = channel_manager.createChannel(channel);
             
             if (channel_id == -1) {
-                crow::json::wvalue response;
+                nlohmann::json response;
                 response["success"] = false;
                 response["error"] = "Channel ID already exists";
-                return crow::response(400, response);
+                res.status = 400;
+                res.set_content(response.dump(), "application/json");
+                return;
             }
             
             // 如果通道启用，自动启动拉流分析
@@ -59,24 +65,25 @@ void setupChannelRoutes(crow::SimpleApp& app,
                 }
             }
             
-            crow::json::wvalue response;
+            nlohmann::json response;
             response["success"] = true;
             response["channel_id"] = channel_id;
-            return crow::response(response);
+            res.status = 200;
+            res.set_content(response.dump(), "application/json");
         } catch (const std::exception& e) {
-            return crow::response(500, std::string("Error: ") + e.what());
+            res.status = 500;
+            res.set_content(std::string("Error: ") + e.what(), "text/plain");
         }
     });
     
     // 获取所有通道
-    CROW_ROUTE(app, "/api/channels").methods("GET"_method)
-    ([]() {
+    svr.Get("/api/channels", [](const httplib::Request& req, httplib::Response& res) {
         auto& channel_manager = ChannelManager::getInstance();
         auto channels = channel_manager.getAllChannels();
         
-        crow::json::wvalue::list channel_list;
+        nlohmann::json channel_list = nlohmann::json::array();
         for (const auto& channel : channels) {
-            crow::json::wvalue ch;
+            nlohmann::json ch;
             ch["id"] = channel->id;
             ch["name"] = channel->name;
             ch["source_url"] = channel->source_url;
@@ -91,52 +98,62 @@ void setupChannelRoutes(crow::SimpleApp& app,
             channel_list.push_back(ch);
         }
         
-        crow::json::wvalue response;
+        nlohmann::json response;
         response["success"] = true;
-        response["channels"] = std::move(channel_list);
-        return crow::response(response);
+        response["channels"] = channel_list;
+        res.status = 200;
+        res.set_content(response.dump(), "application/json");
     });
     
     // 获取单个通道
-    CROW_ROUTE(app, "/api/channels/<int>").methods("GET"_method)
-    ([](int channel_id) {
+    svr.Get(R"(/api/channels/(\d+))", [](const httplib::Request& req, httplib::Response& res) {
+        int channel_id = std::stoi(req.matches[1]);
         auto& channel_manager = ChannelManager::getInstance();
         auto channel = channel_manager.getChannel(channel_id);
         
         if (!channel) {
-            return crow::response(404, "Channel not found");
+            res.status = 404;
+            res.set_content("Channel not found", "text/plain");
+            return;
         }
         
-        crow::json::wvalue response;
+        nlohmann::json response;
         response["success"] = true;
         response["channel"]["id"] = channel->id;
         response["channel"]["name"] = channel->name;
         response["channel"]["source_url"] = channel->source_url;
-            response["channel"]["status"] = channelStatusToString(channel->status);
-            response["channel"]["enabled"] = channel->enabled.load();
-            response["channel"]["report_enabled"] = channel->report_enabled.load();
-            response["channel"]["width"] = channel->width;
-            response["channel"]["height"] = channel->height;
-            response["channel"]["fps"] = channel->fps;
-            response["channel"]["created_at"] = channel->created_at;
-            response["channel"]["updated_at"] = channel->updated_at;
+        response["channel"]["status"] = channelStatusToString(channel->status);
+        response["channel"]["enabled"] = channel->enabled.load();
+        response["channel"]["report_enabled"] = channel->report_enabled.load();
+        response["channel"]["width"] = channel->width;
+        response["channel"]["height"] = channel->height;
+        response["channel"]["fps"] = channel->fps;
+        response["channel"]["created_at"] = channel->created_at;
+        response["channel"]["updated_at"] = channel->updated_at;
         
-        return crow::response(response);
+        res.status = 200;
+        res.set_content(response.dump(), "application/json");
     });
     
     // 更新通道
-    CROW_ROUTE(app, "/api/channels/<int>").methods("PUT"_method)
-    ([detector, stream_manager](const crow::request& req, int channel_id) {
+    svr.Put(R"(/api/channels/(\d+))", [detector, stream_manager](const httplib::Request& req, httplib::Response& res) {
         try {
-            auto json_body = crow::json::load(req.body);
-            if (!json_body) {
-                return crow::response(400, "Invalid JSON");
+            int channel_id = std::stoi(req.matches[1]);
+            nlohmann::json json_body;
+            try {
+                json_body = nlohmann::json::parse(req.body);
+            } catch (const nlohmann::json::exception&) {
+                res.status = 400;
+                res.set_content("Invalid JSON", "text/plain");
+                return;
             }
             
             auto& channel_manager = ChannelManager::getInstance();
             auto existing = channel_manager.getChannel(channel_id);
             if (!existing) {
-                return crow::response(404, "Channel not found");
+                res.status = 404;
+                res.set_content("Channel not found", "text/plain");
+                return;
             }
             
             Channel channel = *existing;
@@ -144,24 +161,24 @@ void setupChannelRoutes(crow::SimpleApp& app,
             std::string old_source_url = channel.source_url;  // 保存旧的拉流地址
             bool source_url_changed = false;  // 标记拉流地址是否变化
             
-            if (json_body.has("id")) {
-                channel.id = json_body["id"].i();
+            if (json_body.contains("id")) {
+                channel.id = json_body["id"].get<int>();
             }
-            if (json_body.has("name")) {
-                channel.name = json_body["name"].s();
+            if (json_body.contains("name")) {
+                channel.name = json_body["name"].get<std::string>();
             }
-            if (json_body.has("source_url")) {
-                std::string new_source_url = json_body["source_url"].s();
+            if (json_body.contains("source_url")) {
+                std::string new_source_url = json_body["source_url"].get<std::string>();
                 if (new_source_url != old_source_url) {
                     source_url_changed = true;
                 }
                 channel.source_url = new_source_url;
             }
-            if (json_body.has("enabled")) {
-                channel.enabled = json_body["enabled"].b();
+            if (json_body.contains("enabled")) {
+                channel.enabled = json_body["enabled"].get<bool>();
             }
-            if (json_body.has("report_enabled")) {
-                channel.report_enabled = json_body["report_enabled"].b();
+            if (json_body.contains("report_enabled")) {
+                channel.report_enabled = json_body["report_enabled"].get<bool>();
             }
             
             bool success = channel_manager.updateChannel(channel_id, channel);
@@ -196,30 +213,35 @@ void setupChannelRoutes(crow::SimpleApp& app,
                 }
             }
             
-            crow::json::wvalue response;
+            nlohmann::json response;
             response["success"] = success;
             if (!success) {
                 // 检查是否是因为id冲突
-                if (json_body.has("id") && json_body["id"].i() != channel_id) {
+                if (json_body.contains("id") && json_body["id"].get<int>() != channel_id) {
                     response["error"] = "Channel ID already exists";
-                    return crow::response(400, response);
+                    res.status = 400;
+                    res.set_content(response.dump(), "application/json");
+                    return;
                 }
             }
-            return crow::response(response);
+            res.status = 200;
+            res.set_content(response.dump(), "application/json");
         } catch (const std::exception& e) {
-            return crow::response(500, std::string("Error: ") + e.what());
+            res.status = 500;
+            res.set_content(std::string("Error: ") + e.what(), "text/plain");
         }
     });
     
     // 删除通道
-    CROW_ROUTE(app, "/api/channels/<int>").methods("DELETE"_method)
-    ([](int channel_id) {
+    svr.Delete(R"(/api/channels/(\d+))", [](const httplib::Request& req, httplib::Response& res) {
+        int channel_id = std::stoi(req.matches[1]);
         auto& channel_manager = ChannelManager::getInstance();
         bool success = channel_manager.deleteChannel(channel_id);
         
-        crow::json::wvalue response;
+        nlohmann::json response;
         response["success"] = success;
-        return crow::response(response);
+        res.status = 200;
+        res.set_content(response.dump(), "application/json");
     });
     
 }

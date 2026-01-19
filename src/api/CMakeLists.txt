@@ -17,7 +17,6 @@ target_include_directories(api PUBLIC
 )
 
 target_link_libraries(api PUBLIC
-    Crow::Crow
     config
     models
     database

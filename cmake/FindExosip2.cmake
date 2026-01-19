@@ -186,21 +186,86 @@ if(NOT EXOSIP2_FOUND)
             # 创建配置脚本
             set(OSIP2_CONFIGURE_SCRIPT "${CMAKE_BINARY_DIR}/osip2-configure.sh")
             # 检测是否为交叉编译
+            # 方法1: 检查 CMAKE_CROSSCOMPILING
+            # 方法2: 检查编译器名称是否包含交叉编译前缀
+            set(CROSS_COMPILE_FLAGS "")
             if(CMAKE_CROSSCOMPILING)
-                set(CROSS_COMPILE_FLAGS "--host=${CMAKE_SYSTEM_PROCESSOR}")
                 if(CMAKE_SYSTEM_PROCESSOR STREQUAL "aarch64")
                     set(CROSS_COMPILE_FLAGS "--host=aarch64-linux-gnu")
+                else()
+                    set(CROSS_COMPILE_FLAGS "--host=${CMAKE_SYSTEM_PROCESSOR}-linux-gnu")
                 endif()
             else()
-                set(CROSS_COMPILE_FLAGS "")
+                # 通过检查编译器名称来检测交叉编译
+                get_filename_component(COMPILER_NAME ${CMAKE_C_COMPILER} NAME)
+                if(COMPILER_NAME MATCHES "^([^-]+)-.*-gcc$")
+                    set(COMPILER_PREFIX ${CMAKE_MATCH_1})
+                    if(COMPILER_PREFIX STREQUAL "aarch64")
+                        set(CROSS_COMPILE_FLAGS "--host=aarch64-linux-gnu")
+                    elseif(COMPILER_PREFIX MATCHES "^arm")
+                        set(CROSS_COMPILE_FLAGS "--host=${COMPILER_PREFIX}-linux-gnu")
+                    elseif(COMPILER_PREFIX MATCHES "^x86_64" OR COMPILER_PREFIX MATCHES "^i[3-6]86")
+                        # 本地编译，不需要 --host
+                        set(CROSS_COMPILE_FLAGS "")
+                    else()
+                        # 其他架构，尝试使用编译器前缀
+                        set(CROSS_COMPILE_FLAGS "--host=${COMPILER_PREFIX}-linux-gnu")
+                    endif()
+                endif()
             endif()
+            
+            # 获取工具链工具路径
+            if(CMAKE_AR)
+                set(AR_TOOL "${CMAKE_AR}")
+            else()
+                set(AR_TOOL "ar")
+            endif()
+            if(CMAKE_RANLIB)
+                set(RANLIB_TOOL "${CMAKE_RANLIB}")
+            else()
+                set(RANLIB_TOOL "ranlib")
+            endif()
+            if(CMAKE_STRIP)
+                set(STRIP_TOOL "${CMAKE_STRIP}")
+            else()
+                set(STRIP_TOOL "strip")
+            endif()
+            
             file(WRITE ${OSIP2_CONFIGURE_SCRIPT}
                 "#!/bin/sh\n"
+                "set -e\n"
+                "set -x\n"
+                "echo \"=== Configuring osip2 ===\"\n"
+                "echo \"Source directory: ${OSIP2_SOURCE_DIR}\"\n"
+                "echo \"Install directory: ${EXOSIP2_INSTALL_DIR}\"\n"
+                "echo \"Compiler: ${CMAKE_C_COMPILER}\"\n"
                 "cd ${OSIP2_SOURCE_DIR}\n"
-                "if [ -f autogen.sh ]; then\n"
-                "  ./autogen.sh\n"
+                "if [ -f autogen.sh ] && [ ! -f configure ]; then\n"
+                "  echo \"Running autogen.sh...\"\n"
+                "  ./autogen.sh || { echo \"autogen.sh failed, but continuing if configure exists\"; }\n"
                 "fi\n"
-                "./configure --prefix=${EXOSIP2_INSTALL_DIR} --enable-static --disable-shared ${CROSS_COMPILE_FLAGS} CC=${CMAKE_C_COMPILER} CXX=${CMAKE_CXX_COMPILER}\n"
+                "if [ ! -f configure ]; then\n"
+                "  echo \"ERROR: configure script not found after autogen.sh\"\n"
+                "  exit 1\n"
+                "fi\n"
+                "export CC=\"${CMAKE_C_COMPILER}\"\n"
+                "export CXX=\"${CMAKE_CXX_COMPILER}\"\n"
+                "export AR=\"${AR_TOOL}\"\n"
+                "export RANLIB=\"${RANLIB_TOOL}\"\n"
+                "export STRIP=\"${STRIP_TOOL}\"\n"
+                "# 在交叉编译时，可能需要设置一些额外的标志\n"
+                "if [ -n \"${CROSS_COMPILE_FLAGS}\" ]; then\n"
+                "  export CFLAGS=\"-fPIC\"\n"
+                "  export CXXFLAGS=\"-fPIC\"\n"
+                "fi\n"
+                "echo \"CC=\$CC\"\n"
+                "echo \"CXX=\$CXX\"\n"
+                "echo \"AR=\$AR\"\n"
+                "echo \"CFLAGS=\$CFLAGS\"\n"
+                "echo \"CXXFLAGS=\$CXXFLAGS\"\n"
+                "echo \"Running configure...\"\n"
+                "./configure --prefix=${EXOSIP2_INSTALL_DIR} --enable-static --disable-shared ${CROSS_COMPILE_FLAGS} CC=\"${CMAKE_C_COMPILER}\" CXX=\"${CMAKE_CXX_COMPILER}\" AR=\"${AR_TOOL}\" RANLIB=\"${RANLIB_TOOL}\" STRIP=\"${STRIP_TOOL}\" || { echo \"configure failed\"; cat config.log 2>/dev/null || true; exit 1; }\n"
+                "echo \"=== osip2 configuration completed ===\"\n"
             )
             file(CHMOD ${OSIP2_CONFIGURE_SCRIPT} FILE_PERMISSIONS OWNER_READ OWNER_WRITE OWNER_EXECUTE)
             
@@ -225,14 +290,31 @@ if(NOT EXOSIP2_FOUND)
             # 编译 eXosip2（依赖 osip2）
             # 创建配置脚本
             set(EXOSIP2_CONFIGURE_SCRIPT "${CMAKE_BINARY_DIR}/exosip2-configure.sh")
-            # 检测是否为交叉编译
+            # 检测是否为交叉编译（使用与 osip2 相同的逻辑）
+            set(EXOSIP2_CROSS_COMPILE_FLAGS "")
             if(CMAKE_CROSSCOMPILING)
-                set(CROSS_COMPILE_FLAGS "--host=${CMAKE_SYSTEM_PROCESSOR}")
                 if(CMAKE_SYSTEM_PROCESSOR STREQUAL "aarch64")
-                    set(CROSS_COMPILE_FLAGS "--host=aarch64-linux-gnu")
+                    set(EXOSIP2_CROSS_COMPILE_FLAGS "--host=aarch64-linux-gnu")
+                else()
+                    set(EXOSIP2_CROSS_COMPILE_FLAGS "--host=${CMAKE_SYSTEM_PROCESSOR}-linux-gnu")
                 endif()
             else()
-                set(CROSS_COMPILE_FLAGS "")
+                # 通过检查编译器名称来检测交叉编译
+                get_filename_component(COMPILER_NAME ${CMAKE_C_COMPILER} NAME)
+                if(COMPILER_NAME MATCHES "^([^-]+)-.*-gcc$")
+                    set(COMPILER_PREFIX ${CMAKE_MATCH_1})
+                    if(COMPILER_PREFIX STREQUAL "aarch64")
+                        set(EXOSIP2_CROSS_COMPILE_FLAGS "--host=aarch64-linux-gnu")
+                    elseif(COMPILER_PREFIX MATCHES "^arm")
+                        set(EXOSIP2_CROSS_COMPILE_FLAGS "--host=${COMPILER_PREFIX}-linux-gnu")
+                    elseif(COMPILER_PREFIX MATCHES "^x86_64" OR COMPILER_PREFIX MATCHES "^i[3-6]86")
+                        # 本地编译，不需要 --host
+                        set(EXOSIP2_CROSS_COMPILE_FLAGS "")
+                    else()
+                        # 其他架构，尝试使用编译器前缀
+                        set(EXOSIP2_CROSS_COMPILE_FLAGS "--host=${COMPILER_PREFIX}-linux-gnu")
+                    endif()
+                endif()
             endif()
             
             # 尝试获取 vcpkg 安装目录（用于 OpenSSL）
@@ -262,13 +344,50 @@ if(NOT EXOSIP2_FOUND)
                 set(OPENSSL_PKG_CONFIG_PATH "${VCPKG_TRIPLET_DIR}/lib/pkgconfig")
             endif()
             
+            # 获取工具链工具路径（用于 eXosip2）
+            if(CMAKE_AR)
+                set(AR_TOOL "${CMAKE_AR}")
+            else()
+                set(AR_TOOL "ar")
+            endif()
+            if(CMAKE_RANLIB)
+                set(RANLIB_TOOL "${CMAKE_RANLIB}")
+            else()
+                set(RANLIB_TOOL "ranlib")
+            endif()
+            if(CMAKE_STRIP)
+                set(STRIP_TOOL "${CMAKE_STRIP}")
+            else()
+                set(STRIP_TOOL "strip")
+            endif()
+            
             file(WRITE ${EXOSIP2_CONFIGURE_SCRIPT}
                 "#!/bin/sh\n"
+                "set -e\n"
+                "set -x\n"
+                "echo \"=== Configuring eXosip2 ===\"\n"
+                "echo \"Source directory: ${EXOSIP2_SOURCE_DIR}\"\n"
+                "echo \"Install directory: ${EXOSIP2_INSTALL_DIR}\"\n"
+                "echo \"Compiler: ${CMAKE_C_COMPILER}\"\n"
                 "cd ${EXOSIP2_SOURCE_DIR}\n"
-                "if [ -f autogen.sh ]; then\n"
-                "  ./autogen.sh\n"
+                "if [ -f autogen.sh ] && [ ! -f configure ]; then\n"
+                "  echo \"Running autogen.sh...\"\n"
+                "  ./autogen.sh || { echo \"autogen.sh failed, but continuing if configure exists\"; }\n"
                 "fi\n"
+                "if [ ! -f configure ]; then\n"
+                "  echo \"ERROR: configure script not found after autogen.sh\"\n"
+                "  exit 1\n"
+                "fi\n"
+                "export CC=\"${CMAKE_C_COMPILER}\"\n"
+                "export CXX=\"${CMAKE_CXX_COMPILER}\"\n"
+                "export AR=\"${AR_TOOL}\"\n"
+                "export RANLIB=\"${RANLIB_TOOL}\"\n"
+                "export STRIP=\"${STRIP_TOOL}\"\n"
                 "export PKG_CONFIG_PATH=${EXOSIP2_INSTALL_DIR}/lib/pkgconfig:\${PKG_CONFIG_PATH}\n"
+                "echo \"CC=\$CC\"\n"
+                "echo \"CXX=\$CXX\"\n"
+                "echo \"AR=\$AR\"\n"
+                "echo \"PKG_CONFIG_PATH=\$PKG_CONFIG_PATH\"\n"
             )
             # 添加 OpenSSL 路径（如果存在）
             if(OPENSSL_PKG_CONFIG_PATH)
@@ -295,9 +414,11 @@ if(NOT EXOSIP2_FOUND)
             
             # 构建 configure 命令
             # 注意：eXosip2 的 configure 脚本不支持 --with-openssl，我们通过 PKG_CONFIG_PATH 和 LDFLAGS 来指定 OpenSSL
-            set(CONFIGURE_OPTS "--prefix=${EXOSIP2_INSTALL_DIR} --enable-static --disable-shared ${CROSS_COMPILE_FLAGS}")
+            set(CONFIGURE_OPTS "--prefix=${EXOSIP2_INSTALL_DIR} --enable-static --disable-shared ${EXOSIP2_CROSS_COMPILE_FLAGS}")
             file(APPEND ${EXOSIP2_CONFIGURE_SCRIPT}
-                "./configure ${CONFIGURE_OPTS} CC=${CMAKE_C_COMPILER} CXX=${CMAKE_CXX_COMPILER}\n"
+                "echo \"Running configure...\"\n"
+                "./configure ${CONFIGURE_OPTS} CC=\"${CMAKE_C_COMPILER}\" CXX=\"${CMAKE_CXX_COMPILER}\" AR=\"${AR_TOOL}\" RANLIB=\"${RANLIB_TOOL}\" STRIP=\"${STRIP_TOOL}\" || { echo \"configure failed\"; cat config.log 2>/dev/null || true; exit 1; }\n"
+                "echo \"=== eXosip2 configuration completed ===\"\n"
             )
             file(CHMOD ${EXOSIP2_CONFIGURE_SCRIPT} FILE_PERMISSIONS OWNER_READ OWNER_WRITE OWNER_EXECUTE)
             

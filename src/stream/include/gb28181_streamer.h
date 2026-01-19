@@ -17,6 +17,10 @@ extern "C" {
 }
 #include "gb28181_config.h"
 
+#ifdef ENABLE_BM1684
+#include "bm1684_video_encoder.h"
+#endif
+
 namespace detector_service {
 
 /**
@@ -44,6 +48,11 @@ private:
     std::atomic<bool> is_streaming;         // 是否正在推流
     std::mutex stream_mutex;
     
+#ifdef ENABLE_BM1684
+    std::unique_ptr<BM1684VideoEncoder> bm1684_encoder;  // BM1684硬件编码器
+    bool use_hw_encode;                     // 是否使用硬件编码
+#endif
+    
 public:
     GB28181Streamer() 
         : fmt_ctx(nullptr), 
@@ -68,13 +77,15 @@ public:
      * @param dest_port 目标RTP端口
      * @param ssrc 媒体流SSRC
      * @param bitrate 比特率（bps），可选
+     * @param use_hw_encode 是否使用硬件编码（BM1684），可选
      * @return 是否成功
      */
     bool initialize(const GB28181Config& config,
                    int width, int height, int fps,
                    const std::string& dest_ip, int dest_port,
                    const std::string& ssrc,
-                   std::optional<int> bitrate = std::nullopt);
+                   std::optional<int> bitrate = std::nullopt,
+                   bool use_hw_encode = false);
     
     /**
      * @brief 推送一帧视频

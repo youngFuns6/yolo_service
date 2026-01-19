@@ -25,12 +25,30 @@ target_include_directories(models PUBLIC
     ${OpenCV_INCLUDE_DIRS}
 )
 
-target_link_libraries(models PUBLIC
-    Threads::Threads
-    database
-    ${OpenCV_LIBS}
-    nlohmann_json::nlohmann_json
-)
+# 在 BM1684 模式下，使用 SDK 提供的 OpenCV
+if(ENABLE_BM1684)
+    target_include_directories(models PUBLIC
+        ${BM1684_INCLUDE_DIRS}  # 包含 bmcv_api.h 等 BM1684 SDK 头文件
+        ${BM1684_OPENCV_INCLUDE_DIRS}
+        ${BM1684_FFMPEG_INCLUDE_DIRS}  # OpenCV 头文件依赖 FFmpeg 头文件
+    )
+    target_link_directories(models PUBLIC
+        ${BM1684_OPENCV_LIB_DIRS}
+    )
+    target_link_libraries(models PUBLIC
+        Threads::Threads
+        database
+        ${BM1684_OPENCV_LIBS}
+        nlohmann_json::nlohmann_json
+    )
+else()
+    target_link_libraries(models PUBLIC
+        Threads::Threads
+        database
+        ${OpenCV_LIBS}
+        nlohmann_json::nlohmann_json
+    )
+endif()
 
 target_compile_options(models PRIVATE
     $<$<CXX_COMPILER_ID:MSVC>:/W4>

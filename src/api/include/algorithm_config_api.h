@@ -1,10 +1,10 @@
 #pragma once
 
-#include <crow.h>
+#include <httplib.h>
 
 namespace detector_service {
 
-void setupAlgorithmConfigRoutes(crow::SimpleApp& app);
+void setupAlgorithmConfigRoutes(httplib::Server& svr);
 
 } // namespace detector_service
 

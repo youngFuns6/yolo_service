@@ -6,23 +6,55 @@ add_library(stream STATIC
     gb28181_sip_client.cpp
 )
 
+# BM1684平台视频编解码器支持
+if(ENABLE_BM1684)
+    target_sources(stream PRIVATE
+        bm1684_video_decoder.cpp
+        bm1684_video_encoder.cpp
+    )
+    target_include_directories(stream PUBLIC
+        ${BM1684_INCLUDE_DIRS}
+    )
+    target_link_directories(stream PUBLIC
+        ${BM1684_FFMPEG_LIB_DIRS}
+    )
+endif()
+
 target_include_directories(stream PUBLIC
     ${CMAKE_SOURCE_DIR}/src
     ${CMAKE_CURRENT_SOURCE_DIR}/include
+    ${CMAKE_SOURCE_DIR}/src/utils/include
     ${OpenCV_INCLUDE_DIRS}
 )
 
-# 查找FFmpeg库 - 优先使用vcpkg的FFmpeg包
-find_package(unofficial-ffmpeg QUIET)
-if(unofficial-ffmpeg_FOUND)
-    message(STATUS "Found FFmpeg via vcpkg")
-    target_link_libraries(stream PUBLIC
-        unofficial::ffmpeg::avcodec
-        unofficial::ffmpeg::avformat
-        unofficial::ffmpeg::avutil
-        unofficial::ffmpeg::swscale
+# 在 BM1684 模式下，使用 SDK 提供的 OpenCV 和 FFmpeg
+if(ENABLE_BM1684)
+    target_include_directories(stream PUBLIC
+        ${BM1684_INCLUDE_DIRS}  # 包含 bmcv_api.h 等 BM1684 SDK 头文件
+        ${BM1684_OPENCV_INCLUDE_DIRS}
+        ${BM1684_FFMPEG_INCLUDE_DIRS}
     )
+    target_link_directories(stream PUBLIC
+        ${BM1684_OPENCV_LIB_DIRS}
+        ${BM1684_FFMPEG_LIB_DIRS}
+    )
+    target_link_libraries(stream PUBLIC
+        ${BM1684_OPENCV_LIBS}
+        ${BM1684_FFMPEG_LIBS}
+    )
+    message(STATUS "使用 BM1684 SDK 提供的 OpenCV 和 FFmpeg")
 else()
+    # 查找FFmpeg库 - 优先使用vcpkg的FFmpeg包
+    find_package(unofficial-ffmpeg QUIET)
+    if(unofficial-ffmpeg_FOUND)
+        message(STATUS "Found FFmpeg via vcpkg")
+        target_link_libraries(stream PUBLIC
+            unofficial::ffmpeg::avcodec
+            unofficial::ffmpeg::avformat
+            unofficial::ffmpeg::avutil
+            unofficial::ffmpeg::swscale
+        )
+    else()
     # 回退到手动查找FFmpeg库
     find_path(AVCODEC_INCLUDE_DIR libavcodec/avcodec.h)
     find_path(AVFORMAT_INCLUDE_DIR libavformat/avformat.h)
@@ -54,7 +86,12 @@ else()
     else()
         message(WARNING "FFmpeg libraries not found, RTMP push stream may not work")
     endif()
-endif()
+    endif()  # 结束 unofficial-ffmpeg_FOUND 的 else 分支
+    # 在非 BM1684 模式下，链接 OpenCV
+    target_link_libraries(stream PUBLIC
+        ${OpenCV_LIBS}
+    )
+endif()  # 结束 ENABLE_BM1684 的 else 分支
 
 # 链接eXosip2库（由主CMakeLists.txt的FindExosip2模块处理）
 if(EXOSIP2_FOUND)
@@ -96,7 +133,6 @@ else()
 endif()
 
 target_link_libraries(stream PUBLIC
-    ${OpenCV_LIBS}
     Threads::Threads
     config
     models

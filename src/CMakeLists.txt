@@ -13,7 +13,6 @@ target_link_libraries(${PROJECT_NAME}
     ${OpenCV_LIBS}
     Threads::Threads
     unofficial::sqlite3::sqlite3
-    Crow::Crow
     utils
     models
     database

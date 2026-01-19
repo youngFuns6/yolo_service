@@ -3,6 +3,7 @@ build/
 cmake-build-*/
 .venv/
 build/
+examples/
 
 # CMake 生成文件
 CMakeCache.txt

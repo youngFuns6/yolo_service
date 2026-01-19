@@ -25,6 +25,7 @@ CLEAN=false
 JOBS=$(nproc 2>/dev/null || echo 4)
 NO_PROXY=false
 STATIC_LINK_ALL=false
+ENABLE_BM1684=false
 
 # 显示帮助信息
 show_help() {
@@ -41,6 +42,7 @@ show_help() {
     -j, --jobs N                 并行编译任务数 [默认: CPU核心数]
     --no-proxy                   禁用代理（用于 vcpkg 下载）
     --static                     启用完全静态链接（包括 libc 和 libm，解决 GLIBC 版本问题）
+    --bm1684                     启用BM1684平台支持（硬件编解码和TPU推理）
     -h, --help                   显示此帮助信息
 
 平台和架构组合示例:
@@ -55,6 +57,8 @@ show_help() {
     $0 -p windows -a x64        # Windows x64 Release
     $0 -p linux -a arm64 -t Debug  # Linux ARM64 Debug
     $0 -p linux -a arm64 --static  # Linux ARM64 完全静态链接（解决 GLIBC 版本问题）
+    $0 --bm1684                 # 启用BM1684平台支持（硬件编解码和TPU推理）
+    $0 -p linux -a arm64 --bm1684  # Linux ARM64 with BM1684 support
     $0 -c                       # 清理构建目录
 EOF
 }
@@ -89,6 +93,10 @@ parse_args() {
                 ;;
             --static)
                 STATIC_LINK_ALL=true
+                shift
+                ;;
+            --bm1684)
+                ENABLE_BM1684=true
                 shift
                 ;;
             -h|--help)
@@ -188,6 +196,49 @@ check_cmake() {
     
     CMAKE_VERSION=$(cmake --version | head -n1 | cut -d' ' -f3)
     echo -e "${GREEN}找到 CMake: $CMAKE_VERSION${NC}"
+}
+
+# 检查构建工具
+check_build_tools() {
+    echo -e "${BLUE}检查构建工具...${NC}"
+    
+    MISSING_TOOLS=()
+    
+    # 检查 make
+    if ! command -v make >/dev/null 2>&1; then
+        MISSING_TOOLS+=("make")
+    else
+        echo -e "${GREEN}找到 make: $(make --version | head -n1)${NC}"
+    fi
+    
+    # 检查编译器（根据平台）
+    if [ "$PLATFORM" != "windows" ]; then
+        if ! command -v g++ >/dev/null 2>&1; then
+            MISSING_TOOLS+=("g++")
+        else
+            GXX_VERSION=$(g++ --version | head -n1)
+            echo -e "${GREEN}找到 g++: $GXX_VERSION${NC}"
+        fi
+        
+        if ! command -v gcc >/dev/null 2>&1; then
+            MISSING_TOOLS+=("gcc")
+        else
+            GCC_VERSION=$(gcc --version | head -n1)
+            echo -e "${GREEN}找到 gcc: $GCC_VERSION${NC}"
+        fi
+    fi
+    
+    # 如果有缺失的工具，提示安装
+    if [ ${#MISSING_TOOLS[@]} -gt 0 ]; then
+        echo -e "${RED}错误: 缺少以下构建工具: ${MISSING_TOOLS[*]}${NC}"
+        echo -e "${YELLOW}请安装构建工具:${NC}"
+        if [ "$PLATFORM" = "linux" ]; then
+            echo -e "${BLUE}  sudo apt-get update && sudo apt-get install -y build-essential${NC}"
+        elif [ "$PLATFORM" = "macos" ]; then
+            echo -e "${BLUE}  xcode-select --install${NC}"
+        fi
+        exit 1
+    fi
 }
 
 # 检查并处理代理设置
@@ -297,6 +348,62 @@ check_vcpkg() {
     fi
     
     echo -e "${GREEN}使用 vcpkg: $VCPKG_ROOT${NC}"
+}
+
+# 检查BM1684 SDK
+check_bm1684_sdk() {
+    if [ "$ENABLE_BM1684" = true ]; then
+        echo -e "${BLUE}检查BM1684 SDK...${NC}"
+        
+        if [ -z "$BMNNSDK2_TOP" ]; then
+            echo -e "${YELLOW}警告: BMNNSDK2_TOP 环境变量未设置${NC}"
+            echo -e "${YELLOW}尝试查找BMNNSDK2...${NC}"
+            
+            # 尝试默认位置
+            if [ -d "$HOME/bmnnsdk2/bmnnsdk2-latest" ]; then
+                export BMNNSDK2_TOP="$HOME/bmnnsdk2/bmnnsdk2-latest"
+                echo -e "${GREEN}找到BMNNSDK2: $BMNNSDK2_TOP${NC}"
+            elif [ -d "/opt/bmnnsdk2/bmnnsdk2-latest" ]; then
+                export BMNNSDK2_TOP="/opt/bmnnsdk2/bmnnsdk2-latest"
+                echo -e "${GREEN}找到BMNNSDK2: $BMNNSDK2_TOP${NC}"
+            else
+                echo -e "${RED}错误: 未找到BMNNSDK2，请设置 BMNNSDK2_TOP 环境变量${NC}"
+                echo -e "${YELLOW}或者将SDK安装在默认位置: $HOME/bmnnsdk2/bmnnsdk2-latest${NC}"
+                exit 1
+            fi
+        fi
+        
+        if [ ! -d "$BMNNSDK2_TOP" ]; then
+            echo -e "${RED}错误: BMNNSDK2目录不存在: $BMNNSDK2_TOP${NC}"
+            exit 1
+        fi
+        
+        if [ ! -d "$BMNNSDK2_TOP/include" ]; then
+            echo -e "${RED}错误: BMNNSDK2未正确安装，缺少include目录${NC}"
+            exit 1
+        fi
+        
+        if [ ! -d "$BMNNSDK2_TOP/lib" ]; then
+            echo -e "${RED}错误: BMNNSDK2未正确安装，缺少lib目录${NC}"
+            exit 1
+        fi
+        
+        echo -e "${GREEN}使用BMNNSDK2: $BMNNSDK2_TOP${NC}"
+        
+        # 检查关键库文件
+        if [ "$(uname -m)" = "aarch64" ]; then
+            LIB_DIR="$BMNNSDK2_TOP/lib/bmnn/soc"
+        else
+            LIB_DIR="$BMNNSDK2_TOP/lib/bmnn/pcie"
+        fi
+        
+        if [ ! -d "$LIB_DIR" ]; then
+            echo -e "${YELLOW}警告: 未找到BMNN库目录: $LIB_DIR${NC}"
+            echo -e "${YELLOW}请确认BMNNSDK2安装正确${NC}"
+        else
+            echo -e "${GREEN}BMNN库目录: $LIB_DIR${NC}"
+        fi
+    fi
 }
 
 # 检查 vcpkg 包安装状态（可选，用于信息提示）
@@ -775,27 +882,90 @@ configure_cmake() {
         echo -e "${BLUE}提示: 如需完全静态链接，请使用 --static 选项${NC}"
     fi
     
+    # 添加BM1684支持选项（如果启用）
+    if [ "$ENABLE_BM1684" = true ]; then
+        CMAKE_ARGS+=(-DENABLE_BM1684=ON)
+        echo -e "${GREEN}启用BM1684平台支持（硬件编解码和TPU推理）${NC}"
+        # 设置BMNNSDK2_TOP环境变量，确保CMake能找到SDK
+        if [ -n "$BMNNSDK2_TOP" ]; then
+            export BMNNSDK2_TOP="$BMNNSDK2_TOP"
+            echo -e "${BLUE}BMNNSDK2_TOP: $BMNNSDK2_TOP${NC}"
+        fi
+    else
+        echo -e "${BLUE}BM1684平台支持已禁用${NC}"
+        echo -e "${BLUE}提示: 如需启用BM1684支持，请使用 --bm1684 选项${NC}"
+    fi
+    
     # 运行 CMake，并将输出同时显示和保存到日志
     if ! cmake ../.. "${CMAKE_ARGS[@]}" 2>&1 | tee cmake_config.log; then
         echo -e "${RED}错误: CMake 配置失败${NC}"
-        echo -e "${YELLOW}可能的原因:${NC}"
-        echo -e "${BLUE}  1. vcpkg 依赖包下载/编译失败（网络问题或编译错误）${NC}"
-        echo -e "${BLUE}  2. 编译器未正确设置${NC}"
-        echo -e "${BLUE}  3. 缺少必要的构建工具${NC}"
-        echo -e "${BLUE}  4. 内存不足（某些包编译需要大量内存）${NC}"
         echo ""
-        echo -e "${YELLOW}建议:${NC}"
-        echo -e "${BLUE}  - 检查网络连接，重试构建${NC}"
-        if [ -n "$HTTP_PROXY" ] || [ -n "$HTTPS_PROXY" ]; then
-            echo -e "${BLUE}  - 如果代理不可用，尝试使用 --no-proxy 选项:${NC}"
-            echo -e "${GREEN}    ./build.sh --no-proxy -a arm64${NC}"
+        
+        # 检查是否是网络下载失败
+        if grep -q "Download failed\|vcpkg_download_distfile\|vcpkg_from_github" cmake_config.log 2>/dev/null; then
+            echo -e "${YELLOW}检测到网络下载失败问题${NC}"
+            echo -e "${BLUE}可能的原因:${NC}"
+            echo -e "${BLUE}  1. 网络连接问题（无法访问 GitHub 或其他下载源）${NC}"
+            echo -e "${BLUE}  2. 代理设置错误（代理地址、端口或认证信息不正确）${NC}"
+            echo -e "${BLUE}  3. 代理服务器故障或不可用${NC}"
+            echo -e "${BLUE}  4. 防火墙阻止了连接${NC}"
+            echo ""
+            echo -e "${YELLOW}解决方案:${NC}"
+            if [ -n "$HTTP_PROXY" ] || [ -n "$HTTPS_PROXY" ]; then
+                echo -e "${BLUE}  1. 如果代理不可用，尝试禁用代理:${NC}"
+                echo -e "${GREEN}     ./build.sh --no-proxy -a arm64${NC}"
+                echo -e "${BLUE}  2. 检查代理设置是否正确:${NC}"
+                echo -e "${GREEN}     echo \$HTTP_PROXY \$HTTPS_PROXY${NC}"
+                echo -e "${BLUE}  3. 测试代理连接:${NC}"
+                echo -e "${GREEN}     curl -I https://github.com${NC}"
+            else
+                echo -e "${BLUE}  1. 如果使用代理，设置代理环境变量:${NC}"
+                echo -e "${GREEN}     export HTTP_PROXY=http://proxy.example.com:8080${NC}"
+                echo -e "${GREEN}     export HTTPS_PROXY=http://proxy.example.com:8080${NC}"
+                echo -e "${BLUE}  2. 或者尝试使用 --no-proxy 选项:${NC}"
+                echo -e "${GREEN}     ./build.sh --no-proxy -a arm64${NC}"
+            fi
+            echo -e "${BLUE}  3. 检查网络连接:${NC}"
+            echo -e "${GREEN}     ping github.com${NC}"
+            echo -e "${BLUE}  4. 查看 vcpkg 详细错误日志:${NC}"
+            if [ -f "${BUILD_DIR}/vcpkg-manifest-install.log" ]; then
+                echo -e "${GREEN}     tail -n 50 ${BUILD_DIR}/vcpkg-manifest-install.log${NC}"
+            fi
+        # 检查是否是缺少构建工具
+        elif grep -q "CMAKE_MAKE_PROGRAM is not set\|unable to find a build program\|make.*not found" cmake_config.log 2>/dev/null; then
+            echo -e "${YELLOW}检测到缺少构建工具问题${NC}"
+            echo -e "${BLUE}CMake 无法找到 make 工具${NC}"
+            echo ""
+            echo -e "${YELLOW}解决方案:${NC}"
+            if [ "$PLATFORM" = "linux" ]; then
+                echo -e "${BLUE}  安装构建工具:${NC}"
+                echo -e "${GREEN}    sudo apt-get update && sudo apt-get install -y build-essential${NC}"
+            elif [ "$PLATFORM" = "macos" ]; then
+                echo -e "${BLUE}  安装 Xcode 命令行工具:${NC}"
+                echo -e "${GREEN}    xcode-select --install${NC}"
+            fi
         else
-            echo -e "${BLUE}  - 如果使用代理，检查 HTTP_PROXY 和 HTTPS_PROXY 环境变量${NC}"
+            echo -e "${YELLOW}可能的原因:${NC}"
+            echo -e "${BLUE}  1. vcpkg 依赖包下载/编译失败（网络问题或编译错误）${NC}"
+            echo -e "${BLUE}  2. 编译器未正确设置${NC}"
+            echo -e "${BLUE}  3. 缺少必要的构建工具${NC}"
+            echo -e "${BLUE}  4. 内存不足（某些包编译需要大量内存）${NC}"
+            echo ""
+            echo -e "${YELLOW}建议:${NC}"
+            echo -e "${BLUE}  - 检查网络连接，重试构建${NC}"
+            if [ -n "$HTTP_PROXY" ] || [ -n "$HTTPS_PROXY" ]; then
+                echo -e "${BLUE}  - 如果代理不可用，尝试使用 --no-proxy 选项:${NC}"
+                echo -e "${GREEN}    ./build.sh --no-proxy -a arm64${NC}"
+            else
+                echo -e "${BLUE}  - 如果使用代理，检查 HTTP_PROXY 和 HTTPS_PROXY 环境变量${NC}"
+            fi
         fi
-        echo -e "${BLUE}  - 查看详细日志:${NC}"
-        echo -e "${BLUE}    - CMake 配置日志: ${BUILD_DIR}/cmake_config.log${NC}"
+        
+        echo ""
+        echo -e "${BLUE}查看详细日志:${NC}"
+        echo -e "${BLUE}  - CMake 配置日志: ${BUILD_DIR}/cmake_config.log${NC}"
         if [ -f "${BUILD_DIR}/vcpkg-manifest-install.log" ]; then
-            echo -e "${BLUE}    - vcpkg 安装日志: ${BUILD_DIR}/vcpkg-manifest-install.log${NC}"
+            echo -e "${BLUE}  - vcpkg 安装日志: ${BUILD_DIR}/vcpkg-manifest-install.log${NC}"
         fi
         echo -e "${BLUE}  - 如果 vcpkg 安装卡住，可以尝试手动安装依赖:${NC}"
         echo -e "${GREEN}    cd $VCPKG_ROOT && ./vcpkg install --triplet ${VCPKG_TRIPLET} --x-manifest-root=../../${NC}"
@@ -809,7 +979,23 @@ configure_cmake() {
 build_project() {
     echo -e "${BLUE}开始编译...${NC}"
     cd "$BUILD_DIR"
-    cmake --build . --config "$BUILD_TYPE" -j "$JOBS"
+    
+    if ! cmake --build . --config "$BUILD_TYPE" -j "$JOBS"; then
+        echo -e "${RED}错误: 编译失败${NC}"
+        echo -e "${YELLOW}可能的原因:${NC}"
+        echo -e "${BLUE}  1. 源代码编译错误${NC}"
+        echo -e "${BLUE}  2. 缺少必要的头文件或库文件${NC}"
+        echo -e "${BLUE}  3. 内存不足${NC}"
+        echo -e "${BLUE}  4. 编译器版本不兼容${NC}"
+        echo ""
+        echo -e "${YELLOW}建议:${NC}"
+        echo -e "${BLUE}  - 查看编译错误信息，修复源代码问题${NC}"
+        echo -e "${BLUE}  - 检查是否所有依赖都已正确安装${NC}"
+        echo -e "${BLUE}  - 尝试减少并行编译任务数: -j 4${NC}"
+        cd ../..
+        exit 1
+    fi
+    
     cd ../..
     echo -e "${GREEN}编译完成！${NC}"
 }
@@ -863,8 +1049,10 @@ main() {
     fi
     
     check_cmake
+    check_build_tools
     check_proxy
     check_vcpkg
+    check_bm1684_sdk
     determine_triplet
     check_vcpkg_packages
     create_build_dir

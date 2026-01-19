@@ -4,31 +4,37 @@
 
 namespace detector_service {
 
-void setupWebSocketRoutes(crow::SimpleApp& app) {
+void setupWebSocketRoutes(httplib::Server& svr) {
     auto& ws_handler = WebSocketHandler::getInstance();
     
     // 通道数据订阅端点
-    CROW_WEBSOCKET_ROUTE(app, "/ws/channel")
-    .onopen([&ws_handler](crow::websocket::connection& conn) {
-        ws_handler.handleChannelConnection(conn);
-    })
-    .onclose([&ws_handler](crow::websocket::connection& conn, const std::string& reason, uint16_t status_code) {
-        ws_handler.handleDisconnection(conn);
-    })
-    .onmessage([&ws_handler](crow::websocket::connection& conn, const std::string& message, bool is_binary) {
-        ws_handler.handleChannelMessage(conn, message, is_binary);
+    svr.GetWebSocket("/ws/channel", [&ws_handler](const httplib::Request& req, httplib::WebSocket& ws) {
+        ws.onopen = [&ws_handler](httplib::WebSocket& ws) {
+            ws_handler.handleChannelConnection(&ws);
+        };
+        
+        ws.onmessage = [&ws_handler](httplib::WebSocket& ws, const std::string& message, bool is_binary) {
+            ws_handler.handleChannelMessage(&ws, message, is_binary);
+        };
+        
+        ws.onclose = [&ws_handler](httplib::WebSocket& ws, int status, const std::string& reason) {
+            ws_handler.handleDisconnection(&ws);
+        };
     });
     
     // 报警数据订阅端点
-    CROW_WEBSOCKET_ROUTE(app, "/ws/alert")
-    .onopen([&ws_handler](crow::websocket::connection& conn) {
-        ws_handler.handleAlertConnection(conn);
-    })
-    .onclose([&ws_handler](crow::websocket::connection& conn, const std::string& reason, uint16_t status_code) {
-        ws_handler.handleDisconnection(conn);
-    })
-    .onmessage([&ws_handler](crow::websocket::connection& conn, const std::string& message, bool is_binary) {
-        ws_handler.handleAlertMessage(conn, message, is_binary);
+    svr.GetWebSocket("/ws/alert", [&ws_handler](const httplib::Request& req, httplib::WebSocket& ws) {
+        ws.onopen = [&ws_handler](httplib::WebSocket& ws) {
+            ws_handler.handleAlertConnection(&ws);
+        };
+        
+        ws.onmessage = [&ws_handler](httplib::WebSocket& ws, const std::string& message, bool is_binary) {
+            ws_handler.handleAlertMessage(&ws, message, is_binary);
+        };
+        
+        ws.onclose = [&ws_handler](httplib::WebSocket& ws, int status, const std::string& reason) {
+            ws_handler.handleDisconnection(&ws);
+        };
     });
 }
 

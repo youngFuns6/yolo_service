@@ -24,6 +24,11 @@ extern "C" {
 #include "gb28181_config.h"
 #include "gb28181_sip_client.h"
 
+#ifdef ENABLE_BM1684
+#include "bm1684_video_decoder.h"
+#include "yolov11_detector_bm1684.h"
+#endif
+
 namespace detector_service {
 
 class StreamManager {
@@ -40,6 +45,10 @@ public:
     // 启动/停止拉流分析
     bool startAnalysis(int channel_id, std::shared_ptr<Channel> channel,
                       std::shared_ptr<YOLOv11Detector> detector);
+#ifdef ENABLE_BM1684
+    bool startAnalysisBM1684(int channel_id, std::shared_ptr<Channel> channel,
+                            std::shared_ptr<YOLOv11DetectorBM1684> detector);
+#endif
     bool stopAnalysis(int channel_id);
     bool isAnalyzing(int channel_id);
     
@@ -55,6 +64,10 @@ private:
         std::thread thread;
         std::atomic<bool> running;
         cv::VideoCapture cap;
+        
+#ifdef ENABLE_BM1684
+        std::unique_ptr<BM1684VideoDecoder> bm1684_decoder;  // BM1684硬件解码器
+#endif
         
         AlgorithmConfig algorithm_config;  // 通道的算法配置
         std::mutex config_mutex;           // 配置更新锁

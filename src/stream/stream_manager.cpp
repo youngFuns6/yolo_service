@@ -7,6 +7,11 @@
 #include "common_utils.h"
 #include "ffmpeg_utils.h"
 #include "image_utils.h"
+
+#ifdef ENABLE_BM1684
+#include "bm1684_video_decoder.h"
+#include "yolov11_detector_bm1684.h"
+#endif
 #include <iostream>
 #include <chrono>
 #include <thread>
@@ -541,6 +546,15 @@ void StreamManager::handleGB28181Invite(const GB28181Session& session) {
     auto& config_mgr = GB28181ConfigManager::getInstance();
     GB28181Config gb28181_config = config_mgr.getGB28181Config();
     
+    // 获取检测器配置，判断是否使用硬件编码
+    bool use_hw_encode = false;
+#ifdef ENABLE_BM1684
+    auto& cfg = Config::getInstance();
+    const auto& detector_config = cfg.getDetectorConfig();
+    use_hw_encode = (detector_config.execution_provider == ExecutionProvider::BM1684) &&
+                    detector_config.use_bm1684_hw_decode;
+#endif
+    
     // 初始化推流器
     if (!context->gb28181_info.streamer->initialize(
             gb28181_config,
@@ -549,7 +563,9 @@ void StreamManager::handleGB28181Invite(const GB28181Session& session) {
             channel->fps,
             session.dest_ip,
             session.dest_port,
-            session.ssrc)) {
+            session.ssrc,
+            std::nullopt,  // bitrate
+            use_hw_encode)) {
         std::cerr << "GB28181: 推流器初始化失败" << std::endl;
         return;
     }
@@ -592,6 +608,242 @@ void StreamManager::handleGB28181Bye(const std::string& channel_id_str) {
     // 标记通道为非活跃
     context->gb28181_info.is_active = false;
 }
+
+#ifdef ENABLE_BM1684
+bool StreamManager::startAnalysisBM1684(int channel_id, std::shared_ptr<Channel> channel,
+                                        std::shared_ptr<YOLOv11DetectorBM1684> detector) {
+    std::lock_guard<std::mutex> lock(streams_mutex_);
+    
+    // 如果已经在运行，先停止
+    if (streams_.find(channel_id) != streams_.end()) {
+        stopAnalysis(channel_id);
+    }
+    
+    auto context = std::make_unique<StreamContext>();
+    context->running = true;
+    
+    // 先将 context 插入到 streams_ 中，确保线程启动时可以访问
+    streams_[channel_id] = std::move(context);
+    
+    // 启动工作线程（在工作线程中异步打开流，避免阻塞主线程）
+    streams_[channel_id]->thread = std::thread(&StreamManager::streamWorkerBM1684, this,
+                                                channel_id, channel, detector);
+    
+    // 立即返回，不等待流打开（避免阻塞）
+    return true;
+}
+
+void StreamManager::streamWorkerBM1684(int channel_id, std::shared_ptr<Channel> channel,
+                                       std::shared_ptr<YOLOv11DetectorBM1684> detector) {
+    // 获取 context 引用（需要加锁）
+    std::unique_lock<std::mutex> lock(streams_mutex_);
+    auto it = streams_.find(channel_id);
+    if (it == streams_.end()) {
+        std::cerr << "StreamManager: 通道 " << channel_id << " 的 context 不存在" << std::endl;
+        return;
+    }
+    auto& context = it->second;
+    lock.unlock();
+    
+    // 解码URL
+    std::string decoded_url = decodeUrlEntities(channel->source_url);
+    
+    // 获取BM1684配置
+    auto& config = Config::getInstance();
+    const auto& detector_config = config.getDetectorConfig();
+    
+    // 创建BM1684解码器
+    context->bm1684_decoder = std::make_unique<BM1684VideoDecoder>();
+    
+    // 打开视频流（使用BM1684硬件解码）
+    bool opened = false;
+    int retry_count = 0;
+    const int MAX_RETRIES = 3;
+    
+    while (!opened && retry_count < MAX_RETRIES && context->running.load()) {
+        if (retry_count > 0) {
+            std::cerr << "通道 " << channel_id << " 尝试重新连接 (第 " << retry_count << " 次)..." << std::endl;
+            std::this_thread::sleep_for(std::chrono::milliseconds(1000));
+        }
+        
+        opened = context->bm1684_decoder->open(decoded_url,
+                                               detector_config.bm1684_codec_name,
+                                               detector_config.bm1684_sophon_idx,
+                                               detector_config.bm1684_pcie_no_copyback);
+        
+        if (opened) {
+            auto& db = Database::getInstance();
+            std::string updated_at = getCurrentTime();
+            db.updateChannelStatus(channel_id, "running", updated_at);
+            std::cerr << "通道 " << channel_id << " 成功打开BM1684视频源: " << decoded_url << std::endl;
+        } else {
+            retry_count++;
+            if (retry_count >= MAX_RETRIES) {
+                std::cerr << "通道 " << channel_id << " 无法打开BM1684视频源（已重试 " << MAX_RETRIES << " 次）: " << decoded_url << std::endl;
+                auto& db = Database::getInstance();
+                std::string updated_at = getCurrentTime();
+                db.updateChannelStatus(channel_id, "error", updated_at);
+                return;
+            }
+        }
+    }
+    
+    if (!opened) {
+        return;
+    }
+    
+    // 加载通道的算法配置
+    {
+        std::lock_guard<std::mutex> config_lock(context->config_mutex);
+        auto& config_manager = AlgorithmConfigManager::getInstance();
+        if (!config_manager.getAlgorithmConfig(channel_id, context->algorithm_config)) {
+            std::cerr << "StreamManager: 无法加载通道 " << channel_id << " 的算法配置，使用默认配置" << std::endl;
+            context->algorithm_config = config_manager.getDefaultConfig(channel_id);
+        }
+        
+        if (detector) {
+            detector->updateConfThreshold(context->algorithm_config.conf_threshold);
+            detector->updateNmsThreshold(context->algorithm_config.nms_threshold);
+        }
+    }
+    
+    // 初始化GB28181通道信息（如果启用）
+    auto& gb28181_config_mgr = GB28181ConfigManager::getInstance();
+    GB28181Config gb28181_config = gb28181_config_mgr.getGB28181Config();
+    if (gb28181_config.enabled.load()) {
+        std::string channel_code;
+        if (gb28181_config.device_id.length() >= 10) {
+            char channel_str[5];
+            snprintf(channel_str, sizeof(channel_str), "%04d", channel_id);
+            channel_code = gb28181_config.device_id.substr(0, 10) + "132" + std::string(channel_str) + 
+                          gb28181_config.device_id.substr(gb28181_config.device_id.length() - 3);
+        }
+        
+        context->gb28181_info.channel_id = channel_id;
+        context->gb28181_info.channel_code = channel_code;
+        context->gb28181_info.is_active = false;
+    }
+    
+    cv::Mat frame, processed_frame;
+    auto last_time = std::chrono::steady_clock::now();
+    
+    int detection_interval = 3;
+    {
+        std::lock_guard<std::mutex> config_lock(context->config_mutex);
+        detection_interval = context->algorithm_config.detection_interval;
+    }
+    int frame_counter = 0;
+    
+    int consecutive_failures = 0;
+    const int MAX_CONSECUTIVE_FAILURES = 10;
+    
+    while (context->running.load()) {
+        // 使用BM1684解码器读取帧
+        bool read_success = context->bm1684_decoder->read(frame);
+        
+        if (!read_success || frame.empty()) {
+            consecutive_failures++;
+            
+            if (consecutive_failures >= MAX_CONSECUTIVE_FAILURES) {
+                // 尝试重连
+                context->bm1684_decoder->close();
+                std::this_thread::sleep_for(std::chrono::milliseconds(2000));
+                
+                if (!context->bm1684_decoder->open(decoded_url,
+                                                   detector_config.bm1684_codec_name,
+                                                   detector_config.bm1684_sophon_idx,
+                                                   detector_config.bm1684_pcie_no_copyback)) {
+                    std::cerr << "通道 " << channel_id << " BM1684重连失败" << std::endl;
+                    auto& db = Database::getInstance();
+                    std::string updated_at = getCurrentTime();
+                    db.updateChannelStatus(channel_id, "error", updated_at);
+                    std::this_thread::sleep_for(std::chrono::milliseconds(1000));
+                } else {
+                    consecutive_failures = 0;
+                    auto& db = Database::getInstance();
+                    std::string updated_at = getCurrentTime();
+                    db.updateChannelStatus(channel_id, "running", updated_at);
+                }
+            } else {
+                std::this_thread::sleep_for(std::chrono::milliseconds(100));
+            }
+            continue;
+        }
+        
+        consecutive_failures = 0;
+        frame_counter++;
+        
+        bool need_detection = (frame_counter % detection_interval == 0);
+        
+        // 调整大小
+        if (frame.cols != channel->width || frame.rows != channel->height) {
+            cv::resize(frame, frame, cv::Size(channel->width, channel->height));
+        }
+        
+        // 使用BM1684检测器处理帧
+        std::vector<Detection> detections;
+        if (detector && need_detection) {
+            detections = detector->detect(frame);
+            
+            {
+                std::lock_guard<std::mutex> config_lock(context->config_mutex);
+                detections = detector->applyFilters(
+                    detections,
+                    context->algorithm_config.enabled_classes,
+                    context->algorithm_config.rois,
+                    frame.cols,
+                    frame.rows
+                );
+            }
+            
+            context->last_detections = detections;
+            processed_frame = ImageUtils::drawDetections(frame, detections);
+        } else {
+            if (detector && !context->last_detections.empty()) {
+                processed_frame = ImageUtils::drawDetections(frame, context->last_detections);
+                detections = context->last_detections;
+            } else {
+                processed_frame = frame.clone();
+            }
+        }
+        
+        // GB28181推流处理
+        if (context->gb28181_info.is_active && context->gb28181_info.streamer && 
+            context->gb28181_info.streamer->isStreaming()) {
+            cv::Mat frame_to_push = processed_frame;
+            if (!context->gb28181_info.streamer->pushFrame(frame_to_push)) {
+                if (frame_counter % 100 == 0) {
+                    std::cerr << "通道 " << channel_id << " GB28181推流失败" << std::endl;
+                }
+            }
+        }
+        
+        // 调用回调函数
+        if (frame_callback_) {
+            try {
+                frame_callback_(channel_id, processed_frame, detections);
+            } catch (const std::exception& e) {
+                if (frame_counter % 100 == 0) {
+                    std::cerr << "调用帧回调函数时发生异常: " << e.what() << std::endl;
+                }
+            }
+        }
+        
+        // 精确控制帧率
+        auto current_time = std::chrono::steady_clock::now();
+        auto elapsed = std::chrono::duration_cast<std::chrono::microseconds>(
+            current_time - last_time).count();
+        
+        int64_t frame_interval_us = (1000000LL / channel->fps);
+        if (elapsed < frame_interval_us) {
+            std::this_thread::sleep_for(
+                std::chrono::microseconds(frame_interval_us - elapsed));
+        }
+        
+        last_time = std::chrono::steady_clock::now();
+    }
+}
+#endif // ENABLE_BM1684
 
 } // namespace detector_service
 

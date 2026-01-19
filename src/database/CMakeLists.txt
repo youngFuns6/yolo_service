@@ -21,6 +21,13 @@ target_link_libraries(database PUBLIC
     unofficial::sqlite3::sqlite3
 )
 
+# 显式设置 C++ 标准（使用全局设置的值，确保兼容性）
+set_target_properties(database PROPERTIES
+    CXX_STANDARD ${CMAKE_CXX_STANDARD}
+    CXX_STANDARD_REQUIRED ON
+    CXX_EXTENSIONS OFF
+)
+
 target_compile_options(database PRIVATE
     $<$<CXX_COMPILER_ID:MSVC>:/W4>
     $<$<CXX_COMPILER_ID:GNU,Clang>:-Wall -Wextra -Wpedantic>

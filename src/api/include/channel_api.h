@@ -1,6 +1,6 @@
 #pragma once
 
-#include <crow.h>
+#include <httplib.h>
 #include <memory>
 #include "channel.h"
 
@@ -9,7 +9,7 @@ namespace detector_service {
 class YOLOv11Detector;
 class StreamManager;
 
-void setupChannelRoutes(crow::SimpleApp& app, 
+void setupChannelRoutes(httplib::Server& svr, 
                        std::shared_ptr<YOLOv11Detector> detector,
                        StreamManager* stream_manager);
 

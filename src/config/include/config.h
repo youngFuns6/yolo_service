@@ -12,6 +12,7 @@ enum class ExecutionProvider {
     CoreML,     // Apple CoreML (macOS/iOS)
     TensorRT,   // NVIDIA TensorRT GPU 优化
     ROCM,       // AMD ROCm GPU
+    BM1684,     // 算能BM1684 TPU
     AUTO        // 自动选择（优先 GPU，回退到 CPU）
 };
 
@@ -22,7 +23,13 @@ struct DetectorConfig {
     int input_width = 640;
     int input_height = 640;
     ExecutionProvider execution_provider = ExecutionProvider::AUTO;  // 执行提供者，默认为自动选择
-    int device_id = 0;  // GPU 设备 ID（仅对 CUDA/TensorRT/ROCM 有效）
+    int device_id = 0;  // GPU/TPU 设备 ID（对 CUDA/TensorRT/ROCM/BM1684 有效）
+    
+    // BM1684 特定配置
+    bool use_bm1684_hw_decode = true;  // 是否使用BM1684硬件解码
+    std::string bm1684_codec_name = "h264_bm";  // BM1684解码器名称
+    int bm1684_sophon_idx = 0;  // BM1684设备索引
+    int bm1684_pcie_no_copyback = 0;  // PCIe模式零拷贝选项
 };
 
 struct DatabaseConfig {

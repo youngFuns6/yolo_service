@@ -1,8 +1,13 @@
 #include "gb28181_streamer.h"
 #include "ffmpeg_utils.h"
+#include "config.h"
 #include <iostream>
 #include <sstream>
 #include <iomanip>
+
+#ifdef ENABLE_BM1684
+#include "bm1684_video_encoder.h"
+#endif
 
 namespace detector_service {
 
@@ -10,7 +15,8 @@ bool GB28181Streamer::initialize(const GB28181Config& config,
                                  int width, int height, int fps,
                                  const std::string& dest_ip, int dest_port,
                                  const std::string& ssrc,
-                                 std::optional<int> bitrate) {
+                                 std::optional<int> bitrate,
+                                 bool use_hw_encode) {
     std::lock_guard<std::mutex> lock(stream_mutex);
     
     // 保存配置
@@ -18,6 +24,36 @@ bool GB28181Streamer::initialize(const GB28181Config& config,
     this->dest_port = dest_port;
     this->ssrc = ssrc;
     this->is_ps_stream = (config.stream_mode == "PS");
+    
+#ifdef ENABLE_BM1684
+    this->use_hw_encode = use_hw_encode;
+    
+    // 如果使用硬件编码，初始化BM1684编码器
+    if (use_hw_encode) {
+        auto& cfg = Config::getInstance();
+        const auto& detector_config = cfg.getDetectorConfig();
+        
+        bm1684_encoder = std::make_unique<BM1684VideoEncoder>();
+        
+        int bitrate_value = bitrate.has_value() ? bitrate.value() : (width * height * fps / 10);
+        int gop_size = fps * 2;  // 2秒一个I帧
+        
+        if (!bm1684_encoder->initialize(
+                detector_config.bm1684_codec_name.empty() ? "h264_bm" : detector_config.bm1684_codec_name,
+                width, height, fps,
+                bitrate_value, gop_size,
+                detector_config.bm1684_sophon_idx,
+                false)) {
+            std::cerr << "GB28181: BM1684硬件编码器初始化失败，回退到软件编码" << std::endl;
+            bm1684_encoder.reset();
+            this->use_hw_encode = false;
+        } else {
+            std::cout << "GB28181: 使用BM1684硬件编码器" << std::endl;
+            // 获取编码器上下文用于后续封装
+            codec_ctx = bm1684_encoder->getCodecContext();
+        }
+    }
+#endif
     
     // 选择输出格式（PS流使用mpegts，H.264使用rtp_h264）
     const char* format_name = is_ps_stream ? "mpegts" : "rtp";
@@ -37,7 +73,12 @@ bool GB28181Streamer::initialize(const GB28181Config& config,
         return false;
     }
     
-    // 查找H.264编码器
+#ifdef ENABLE_BM1684
+    // 如果使用硬件编码，codec_ctx已经设置
+    const AVCodec* codec = nullptr;
+    if (!use_hw_encode || !codec_ctx) {
+#endif
+    // 查找H.264编码器（软件编码）
     const AVCodec* codec = avcodec_find_encoder(AV_CODEC_ID_H264);
     if (!codec) {
         std::cerr << "GB28181: 未找到H.264编码器" << std::endl;
@@ -45,8 +86,17 @@ bool GB28181Streamer::initialize(const GB28181Config& config,
         fmt_ctx = nullptr;
         return false;
     }
+#ifdef ENABLE_BM1684
+    }
+#endif
     
     // 创建视频流
+#ifdef ENABLE_BM1684
+    if (use_hw_encode && codec_ctx) {
+        // 使用硬件编码器，从codec_ctx获取codec
+        codec = codec_ctx->codec;
+    }
+#endif
     video_stream = avformat_new_stream(fmt_ctx, codec);
     if (!video_stream) {
         std::cerr << "GB28181: 无法创建视频流" << std::endl;
@@ -55,7 +105,11 @@ bool GB28181Streamer::initialize(const GB28181Config& config,
         return false;
     }
     
-    // 分配编码器上下文
+#ifdef ENABLE_BM1684
+    // 如果使用硬件编码，codec_ctx已经初始化
+    if (!use_hw_encode || !codec_ctx) {
+#endif
+    // 分配编码器上下文（软件编码）
     codec_ctx = avcodec_alloc_context3(codec);
     if (!codec_ctx) {
         std::cerr << "GB28181: 无法分配编码器上下文" << std::endl;
@@ -101,6 +155,9 @@ bool GB28181Streamer::initialize(const GB28181Config& config,
         codec_ctx = nullptr;
         return false;
     }
+#ifdef ENABLE_BM1684
+    }
+#endif
     
     // 将编码器参数复制到流
     ret = avcodec_parameters_from_context(video_stream->codecpar, codec_ctx);
@@ -170,6 +227,52 @@ bool GB28181Streamer::pushFrame(const cv::Mat& frame) {
     
     std::lock_guard<std::mutex> lock(stream_mutex);
     
+#ifdef ENABLE_BM1684
+    // 使用硬件编码
+    if (use_hw_encode && bm1684_encoder) {
+        // 使用BM1684硬件编码器编码
+        if (!bm1684_encoder->encodeFrame(frame)) {
+            return false;
+        }
+        
+        // 获取编码后的数据包
+        AVPacket* pkt = av_packet_alloc();
+        if (!pkt) {
+            return false;
+        }
+        
+        bool success = true;
+        while (bm1684_encoder->getEncodedPacket(pkt)) {
+            // 设置时间戳
+            pkt->stream_index = video_stream->index;
+            av_packet_rescale_ts(pkt, codec_ctx->time_base, video_stream->time_base);
+            
+            // 确保DTS单调递增
+            if (last_dts >= 0 && pkt->dts <= last_dts) {
+                pkt->dts = last_dts + 1;
+                if (pkt->pts < pkt->dts) {
+                    pkt->pts = pkt->dts;
+                }
+            }
+            last_dts = pkt->dts;
+            
+            // 写入数据包
+            int ret = av_interleaved_write_frame(fmt_ctx, pkt);
+            if (ret < 0) {
+                std::cerr << "GB28181: 写入数据包失败: " << avErrorToString(ret) << std::endl;
+                success = false;
+            }
+            
+            av_packet_unref(pkt);
+        }
+        
+        av_packet_free(&pkt);
+        frame_count++;
+        return success;
+    }
+#endif
+    
+    // 软件编码路径
     // 分配AVFrame
     AVFrame* av_frame = av_frame_alloc();
     if (!av_frame) {

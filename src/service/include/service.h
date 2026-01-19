@@ -1,7 +1,7 @@
 #pragma once
 
 #include <memory>
-#include <crow.h>
+#include <httplib.h>
 #include "config.h"
 #include "yolov11_detector.h"
 #include "stream_manager.h"
@@ -35,10 +35,10 @@ struct AppContext {
 bool initializeApplication(AppContext& context, StreamManager& stream_manager);
 
 // 设置所有路由
-void setupAllRoutes(crow::SimpleApp& app, const AppContext& context);
+void setupAllRoutes(httplib::Server& svr, const AppContext& context);
 
 // 启动服务器
-void startServer(crow::SimpleApp& app, const Config& config);
+void startServer(httplib::Server& svr, const Config& config);
 
 // 启动服务（封装所有初始化、路由设置和服务器启动逻辑）
 int startService();

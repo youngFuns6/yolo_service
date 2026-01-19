@@ -1,10 +1,10 @@
 #pragma once
 
-#include <crow.h>
+#include <httplib.h>
 
 namespace detector_service {
 
-void setupWebSocketRoutes(crow::SimpleApp& app);
+void setupWebSocketRoutes(httplib::Server& svr);
 
 } // namespace detector_service
 

@@ -34,7 +34,6 @@ endif()
 
 target_link_libraries(utils PUBLIC
     ${OpenCV_LIBS}
-    CURL::libcurl
     nlohmann_json::nlohmann_json
     unofficial::mosquitto::mosquitto
     models

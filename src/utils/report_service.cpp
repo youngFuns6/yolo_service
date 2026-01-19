@@ -2,7 +2,7 @@
 #include "alert.h"
 #include <iostream>
 #include <sstream>
-#include <curl/curl.h>
+#include <httplib.h>
 #include <nlohmann/json.hpp>
 #include <mosquitto.h>
 #include <cstring>
@@ -42,17 +42,6 @@ void ReportService::on_disconnect(struct mosquitto* mosq, void* obj, int rc) {
     service->mqtt_connected_ = false;
 }
 
-// HTTP 回调函数，用于接收响应
-struct HttpResponse {
-    std::string data;
-};
-
-static size_t WriteCallback(void* contents, size_t size, size_t nmemb, void* userp) {
-    size_t total_size = size * nmemb;
-    HttpResponse* response = static_cast<HttpResponse*>(userp);
-    response->data.append(static_cast<char*>(contents), total_size);
-    return total_size;
-}
 
 bool ReportService::reportAlert(const AlertRecord& alert, const ReportConfig& config) {
     // 检查配置是否启用
@@ -111,43 +100,81 @@ bool ReportService::reportViaHttp(const AlertRecord& alert, const std::string& u
         return false;
     }
     
-    CURL* curl = curl_easy_init();
-    if (!curl) {
-        std::cerr << "上报失败: 无法初始化 CURL" << std::endl;
+    try {
+        // 解析 URL
+        std::string protocol, host, path;
+        int port = 80;
+        bool is_https = false;
+        
+        size_t protocol_end = url.find("://");
+        if (protocol_end != std::string::npos) {
+            protocol = url.substr(0, protocol_end);
+            is_https = (protocol == "https");
+            
+            size_t host_start = protocol_end + 3;
+            size_t path_start = url.find("/", host_start);
+            size_t port_start = url.find(":", host_start);
+            
+            if (path_start == std::string::npos) {
+                path_start = url.length();
+            }
+            
+            if (port_start != std::string::npos && port_start < path_start) {
+                host = url.substr(host_start, port_start - host_start);
+                size_t port_end = (path_start < url.length()) ? path_start : url.length();
+                port = std::stoi(url.substr(port_start + 1, port_end - port_start - 1));
+            } else {
+                host = url.substr(host_start, path_start - host_start);
+                if (is_https) {
+                    port = 443;
+                }
+            }
+            
+            if (path_start < url.length()) {
+                path = url.substr(path_start);
+            } else {
+                path = "/";
+            }
+        } else {
+            std::cerr << "上报失败: 无效的 URL 格式" << std::endl;
+            return false;
+        }
+        
+        // 构建 JSON 数据
+        std::string json_str = buildAlertJson(alert);
+        
+        // 创建 HTTP 客户端
+        httplib::Client client(host, port);
+        client.set_connection_timeout(5, 0);  // 5秒连接超时
+        client.set_read_timeout(5, 0);       // 5秒读取超时
+        
+        // 如果是 HTTPS，需要启用 SSL（注意：cpp-httplib 需要编译时启用 SSL 支持）
+        if (is_https) {
+            client.enable_server_certificate_verification(false);  // 开发环境可以禁用证书验证
+        }
+        
+        // 发送 POST 请求
+        httplib::Headers headers = {
+            {"Content-Type", "application/json"}
+        };
+        
+        auto res = client.Post(path.c_str(), headers, json_str, "application/json");
+        
+        if (!res) {
+            std::cerr << "HTTP 上报失败: 无法连接到服务器" << std::endl;
+            return false;
+        }
+        
+        if (res->status != 200 && res->status != 201) {
+            std::cerr << "HTTP 上报失败: 服务器返回状态码 " << res->status << std::endl;
+            return false;
+        }
+        
+        return true;
+    } catch (const std::exception& e) {
+        std::cerr << "HTTP 上报异常: " << e.what() << std::endl;
         return false;
     }
-    
-    // 构建 JSON 数据
-    std::string json_str = buildAlertJson(alert);
-    
-    HttpResponse response;
-    
-    curl_easy_setopt(curl, CURLOPT_URL, url.c_str());
-    curl_easy_setopt(curl, CURLOPT_POSTFIELDS, json_str.c_str());
-    curl_easy_setopt(curl, CURLOPT_POSTFIELDSIZE, json_str.length());
-    curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, WriteCallback);
-    curl_easy_setopt(curl, CURLOPT_WRITEDATA, &response);
-    
-    // 设置 HTTP 头
-    struct curl_slist* headers = nullptr;
-    headers = curl_slist_append(headers, "Content-Type: application/json");
-    curl_easy_setopt(curl, CURLOPT_HTTPHEADER, headers);
-    
-    // 设置超时
-    curl_easy_setopt(curl, CURLOPT_TIMEOUT, 5L);
-    curl_easy_setopt(curl, CURLOPT_CONNECTTIMEOUT, 5L);
-    
-    CURLcode res = curl_easy_perform(curl);
-    
-    curl_slist_free_all(headers);
-    curl_easy_cleanup(curl);
-    
-    if (res != CURLE_OK) {
-        std::cerr << "HTTP 上报失败: " << curl_easy_strerror(res) << std::endl;
-        return false;
-    }
-    
-    return true;
 }
 
 ReportService::ReportService() 
