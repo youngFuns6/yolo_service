@@ -23,7 +23,7 @@ WebSocketHandler::~WebSocketHandler() {
     }
 }
 
-void WebSocketHandler::handleChannelConnection(httplib::WebSocket* conn) {
+void WebSocketHandler::handleChannelConnection(std::shared_ptr<ix::WebSocket> conn) {
     std::lock_guard<std::mutex> lock(connections_mutex_);
     ConnectionInfo info;
     info.type = ConnectionType::CHANNEL;
@@ -31,7 +31,7 @@ void WebSocketHandler::handleChannelConnection(httplib::WebSocket* conn) {
     connections_[conn] = info;
 }
 
-void WebSocketHandler::handleAlertConnection(httplib::WebSocket* conn) {
+void WebSocketHandler::handleAlertConnection(std::shared_ptr<ix::WebSocket> conn) {
     std::lock_guard<std::mutex> lock(connections_mutex_);
     ConnectionInfo info;
     info.type = ConnectionType::ALERT;
@@ -39,7 +39,7 @@ void WebSocketHandler::handleAlertConnection(httplib::WebSocket* conn) {
     connections_[conn] = info;
 }
 
-void WebSocketHandler::handleDisconnection(httplib::WebSocket* conn) {
+void WebSocketHandler::handleDisconnection(std::shared_ptr<ix::WebSocket> conn) {
     std::lock_guard<std::mutex> lock(connections_mutex_);
     auto it = connections_.find(conn);
     if (it != connections_.end()) {
@@ -59,7 +59,7 @@ void WebSocketHandler::handleDisconnection(httplib::WebSocket* conn) {
     }
 }
 
-void WebSocketHandler::handleChannelMessage(httplib::WebSocket* conn, 
+void WebSocketHandler::handleChannelMessage(std::shared_ptr<ix::WebSocket> conn, 
                                             const std::string& message, 
                                             bool /* is_binary */) {
     try {
@@ -89,7 +89,7 @@ void WebSocketHandler::handleChannelMessage(httplib::WebSocket* conn,
                     nlohmann::json response;
                     response["type"] = "subscription_confirmed";
                     response["channel_id"] = channel_id;
-                    conn->send(response.dump());
+                    conn->sendText(response.dump());
                 }
             }
         }
@@ -98,14 +98,14 @@ void WebSocketHandler::handleChannelMessage(httplib::WebSocket* conn,
     }
 }
 
-void WebSocketHandler::handleAlertMessage(httplib::WebSocket* conn, 
+void WebSocketHandler::handleAlertMessage(std::shared_ptr<ix::WebSocket> conn, 
                                          const std::string& /* message */, 
                                          bool /* is_binary */) {
     // 报警连接不需要处理消息，连接即表示订阅
     // 可以在这里发送确认消息
     nlohmann::json response;
     response["type"] = "alert_subscription_confirmed";
-    conn->send(response.dump());
+    conn->sendText(response.dump());
 }
 
 void WebSocketHandler::broadcastAlert(const AlertMessage& alert) {
@@ -115,7 +115,9 @@ void WebSocketHandler::broadcastAlert(const AlertMessage& alert) {
     for (const auto& pair : connections_) {
         if (pair.second.type == ConnectionType::ALERT && pair.first) {
             try {
-                pair.first->send(json);
+                if (pair.first->getReadyState() == ix::ReadyState::Open) {
+                    pair.first->sendText(json);
+                }
             } catch (const std::exception& e) {
                 std::cerr << "发送报警消息失败: " << e.what() << std::endl;
             }
@@ -225,11 +227,11 @@ void WebSocketHandler::sendWorker() {
                 continue;  // 订阅者可能在编码期间断开
             }
             
-            std::vector<httplib::WebSocket*> to_remove;
-            for (auto* conn : it->second) {
-                if (conn) {
+            std::vector<std::shared_ptr<ix::WebSocket>> to_remove;
+            for (auto conn : it->second) {
+                if (conn && conn->getReadyState() == ix::ReadyState::Open) {
                     try {
-                        conn->send(json);
+                        conn->sendText(json);
                     } catch (const std::exception& e) {
                         std::cerr << "发送帧数据失败 (通道 " << channel_id << "): " 
                                   << e.what() << std::endl;
@@ -242,7 +244,7 @@ void WebSocketHandler::sendWorker() {
             }
             
             // 移除失效的连接
-            for (auto* conn : to_remove) {
+            for (auto conn : to_remove) {
                 it->second.erase(conn);
                 connections_.erase(conn);
             }
@@ -287,4 +289,3 @@ std::string WebSocketHandler::frameToJson(int channel_id, const cv::Mat& frame) 
 }
 
 } // namespace detector_service
-

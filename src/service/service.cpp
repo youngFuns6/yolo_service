@@ -112,7 +112,7 @@ std::string getMimeType(const std::string& file_path) {
 }
 
 // 提供静态文件服务
-void serveStaticFile(const httplib::Request& req, httplib::Response& res, const std::string& file_path) {
+void serveStaticFile(const HttpRequest& req, HttpResponse& res, const std::string& file_path) {
     // 清理路径，移除前导斜杠
     std::string clean_path = file_path;
     if (!clean_path.empty() && clean_path[0] == '/') {
@@ -155,7 +155,7 @@ void serveStaticFile(const httplib::Request& req, httplib::Response& res, const 
     res.set_content(content, getMimeType(full_path.string()));
 }
 
-void setupAllRoutes(httplib::Server& svr, const AppContext& context) {
+void setupAllRoutes(LwsServer& svr, const AppContext& context) {
     // 先设置 API 路由和 WebSocket 路由（优先级更高）
     setupChannelRoutes(svr, context.detector, context.stream_manager);
     setupAlertRoutes(svr);
@@ -166,13 +166,13 @@ void setupAllRoutes(httplib::Server& svr, const AppContext& context) {
     setupWebSocketRoutes(svr);
     
     // 设置根路由 - 返回 website/index.html
-    svr.Get("/", [](const httplib::Request& req, httplib::Response& res) {
+    svr.Get("/", [](const HttpRequest& req, HttpResponse& res) {
         serveStaticFile(req, res, "");
     });
     
     // 设置静态文件路由 - 处理 website 目录下的所有文件（作为 fallback）
     // 注意：这个路由应该在 API 路由之后注册，这样 API 路由会优先匹配
-    svr.Get(R"(/.*)", [](const httplib::Request& req, httplib::Response& res) {
+    svr.Get(R"(/.*)", [](const HttpRequest& req, HttpResponse& res) {
         std::string path = req.path;
         // 如果路径以 api/ 或 ws 开头，不处理（应该由 API/WebSocket 路由处理）
         // 如果这些路由没有匹配，说明路径不存在，返回 404
@@ -191,12 +191,30 @@ void setupAllRoutes(httplib::Server& svr, const AppContext& context) {
     });
 }
 
-void startServer(httplib::Server& svr, const Config& config) {
+void startServer(LwsServer& svr, const Config& config) {
     int port = config.getServerConfig().http_port;
-    std::cout << "服务器启动在端口 " << port << std::endl;
-    if (!svr.listen("0.0.0.0", port)) {
-        std::cerr << "服务器启动失败" << std::endl;
+    std::cout << "正在启动 HTTP 服务器，端口: " << port << std::endl;
+    
+    // httplib::Server::listen 方法签名: bool listen(const std::string& host, int port, int socket_flags = 0)
+    // 注意：httplib 的 listen 是阻塞的，会一直运行直到服务器停止
+    // 如果返回 false，说明启动失败；如果返回 true，会阻塞在这里
+    std::string host = "0.0.0.0";
+    if (!svr.listen(host, port)) {
+        std::cerr << "HTTP 服务器启动失败，端口: " << port << std::endl;
+        std::cerr << "可能的原因：" << std::endl;
+        std::cerr << "  1. 端口已被占用（使用 'lsof -i :" << port << "' 检查）" << std::endl;
+        std::cerr << "  2. 权限不足（需要 root 权限绑定 1024 以下端口）" << std::endl;
+        std::cerr << "  3. 网络配置问题" << std::endl;
+        std::cerr << "  4. httplib 内部错误" << std::endl;
+        std::cerr << std::endl;
+        std::cerr << "解决方案：" << std::endl;
+        std::cerr << "  - 更改配置文件中的 http_port 为其他端口（如 9091, 9092 等）" << std::endl;
+        std::cerr << "  - 或者停止占用端口 " << port << " 的其他程序" << std::endl;
+        return;
     }
+    // 如果 listen 返回 true，程序会阻塞在这里，不会执行后面的代码
+    // 这是正常行为，因为服务器需要持续运行
+    std::cout << "HTTP 服务器已成功启动并正在监听端口 " << port << std::endl;
 }
 
 void startEnabledChannels(StreamManager* stream_manager, 
@@ -236,7 +254,7 @@ int startService() {
     stream_manager.setFrameCallback(processFrameCallback);
     
     // 创建 HTTP 服务器并设置路由
-    httplib::Server svr;
+    LwsServer svr;
     setupAllRoutes(svr, context);
     
     // 启动所有已启用的通道

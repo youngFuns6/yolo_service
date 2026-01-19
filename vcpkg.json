@@ -2,14 +2,14 @@
   "name": "detector-service",
   "version": "0.1.0",
   "dependencies": [
-    "crow",
-    "curl",
+    "cpp-httplib",
     "zlib",
     "sqlite3",
     "onnxruntime",
     "nlohmann-json",
     "mosquitto",
     "openssl",
+    "ixwebsocket",
     {
       "name": "ffmpeg",
       "features": [

@@ -6,23 +6,25 @@
 
 namespace detector_service {
 
-void setupAlgorithmConfigRoutes(crow::SimpleApp& app) {
+void setupAlgorithmConfigRoutes(httplib::Server& svr) {
     auto& config_manager = AlgorithmConfigManager::getInstance();
     
-    // 获取通道的算法配置
-    CROW_ROUTE(app, "/api/algorithm-configs/<int>").methods("GET"_method)
-    ([](int channel_id) {
+    // 获取通道的算法配置 - GET
+    svr.Get(R"(/api/algorithm-configs/(\d+))", [](const httplib::Request& req, httplib::Response& res) {
+        int channel_id = std::stoi(req.matches[1]);
         AlgorithmConfig config;
         auto& config_manager = AlgorithmConfigManager::getInstance();
         
         if (!config_manager.getAlgorithmConfig(channel_id, config)) {
-            crow::json::wvalue response;
+            nlohmann::json response;
             response["success"] = false;
             response["error"] = "获取配置失败";
-            return crow::response(500, response);
+            res.status = 500;
+            res.set_content(response.dump(), "application/json");
+            return;
         }
         
-        crow::json::wvalue response;
+        nlohmann::json response;
         response["success"] = true;
         response["data"]["channel_id"] = config.channel_id;
         response["data"]["model_path"] = config.model_path;
@@ -33,122 +35,124 @@ void setupAlgorithmConfigRoutes(crow::SimpleApp& app) {
         response["data"]["detection_interval"] = config.detection_interval;
         
         // 序列化 enabled_classes
-        crow::json::wvalue classes_array;
+        response["data"]["enabled_classes"] = nlohmann::json::array();
         for (size_t i = 0; i < config.enabled_classes.size(); i++) {
-            classes_array[i] = config.enabled_classes[i];
+            response["data"]["enabled_classes"].push_back(config.enabled_classes[i]);
         }
-        response["data"]["enabled_classes"] = std::move(classes_array);
         
         // 序列化 ROIs
-        crow::json::wvalue rois_array;
+        response["data"]["rois"] = nlohmann::json::array();
         for (size_t i = 0; i < config.rois.size(); i++) {
             const auto& roi = config.rois[i];
-            rois_array[i]["id"] = roi.id;
-            rois_array[i]["type"] = (roi.type == ROIType::RECTANGLE) ? "RECTANGLE" : "POLYGON";
-            rois_array[i]["name"] = roi.name;
-            rois_array[i]["enabled"] = roi.enabled;
-            crow::json::wvalue points_array;
+            nlohmann::json roi_json;
+            roi_json["id"] = roi.id;
+            roi_json["type"] = (roi.type == ROIType::RECTANGLE) ? "RECTANGLE" : "POLYGON";
+            roi_json["name"] = roi.name;
+            roi_json["enabled"] = roi.enabled;
+            roi_json["points"] = nlohmann::json::array();
             for (size_t j = 0; j < roi.points.size(); j++) {
-                points_array[j]["x"] = roi.points[j].x;
-                points_array[j]["y"] = roi.points[j].y;
+                nlohmann::json point_json;
+                point_json["x"] = roi.points[j].x;
+                point_json["y"] = roi.points[j].y;
+                roi_json["points"].push_back(point_json);
             }
-            rois_array[i]["points"] = std::move(points_array);
+            response["data"]["rois"].push_back(roi_json);
         }
-        response["data"]["rois"] = std::move(rois_array);
         
         // 序列化 AlertRules
-        crow::json::wvalue rules_array;
+        response["data"]["alert_rules"] = nlohmann::json::array();
         for (size_t i = 0; i < config.alert_rules.size(); i++) {
             const auto& rule = config.alert_rules[i];
-            rules_array[i]["id"] = rule.id;
-            rules_array[i]["name"] = rule.name;
-            rules_array[i]["enabled"] = rule.enabled;
-            crow::json::wvalue target_classes_array;
+            nlohmann::json rule_json;
+            rule_json["id"] = rule.id;
+            rule_json["name"] = rule.name;
+            rule_json["enabled"] = rule.enabled;
+            rule_json["target_classes"] = nlohmann::json::array();
             for (size_t j = 0; j < rule.target_classes.size(); j++) {
-                target_classes_array[j] = rule.target_classes[j];
+                rule_json["target_classes"].push_back(rule.target_classes[j]);
             }
-            rules_array[i]["target_classes"] = std::move(target_classes_array);
-            rules_array[i]["min_confidence"] = rule.min_confidence;
-            rules_array[i]["min_count"] = rule.min_count;
-            rules_array[i]["max_count"] = rule.max_count;
-            rules_array[i]["suppression_window_seconds"] = rule.suppression_window_seconds;
-            crow::json::wvalue roi_ids_array;
+            rule_json["min_confidence"] = rule.min_confidence;
+            rule_json["min_count"] = rule.min_count;
+            rule_json["max_count"] = rule.max_count;
+            rule_json["suppression_window_seconds"] = rule.suppression_window_seconds;
+            rule_json["roi_ids"] = nlohmann::json::array();
             for (size_t j = 0; j < rule.roi_ids.size(); j++) {
-                roi_ids_array[j] = rule.roi_ids[j];
+                rule_json["roi_ids"].push_back(rule.roi_ids[j]);
             }
-            rules_array[i]["roi_ids"] = std::move(roi_ids_array);
+            response["data"]["alert_rules"].push_back(rule_json);
         }
-        response["data"]["alert_rules"] = std::move(rules_array);
         
         response["data"]["created_at"] = config.created_at;
         response["data"]["updated_at"] = config.updated_at;
         
-        return crow::response(200, response);
+        res.status = 200;
+        res.set_content(response.dump(), "application/json");
     });
     
-    // 保存通道的算法配置
-    CROW_ROUTE(app, "/api/algorithm-configs/<int>").methods("PUT"_method)
-    ([](const crow::request& req, int channel_id) {
+    // 保存通道的算法配置 - PUT
+    svr.Put(R"(/api/algorithm-configs/(\d+))", [](const httplib::Request& req, httplib::Response& res) {
+        int channel_id = std::stoi(req.matches[1]);
         try {
-            auto json_body = crow::json::load(req.body);
-            if (!json_body) {
-                crow::json::wvalue response;
+            nlohmann::json json_body;
+            try {
+                json_body = nlohmann::json::parse(req.body);
+            } catch (const nlohmann::json::exception&) {
+                nlohmann::json response;
                 response["success"] = false;
                 response["error"] = "Invalid JSON";
-                return crow::response(400, response);
+                res.status = 400;
+                res.set_content(response.dump(), "application/json");
+                return;
             }
             
             AlgorithmConfig config;
             config.channel_id = channel_id;
             
-            if (json_body.has("model_path")) {
-                config.model_path = json_body["model_path"].s();
+            if (json_body.contains("model_path")) {
+                config.model_path = json_body["model_path"].get<std::string>();
             }
-            if (json_body.has("conf_threshold")) {
-                config.conf_threshold = static_cast<float>(json_body["conf_threshold"].d());
+            if (json_body.contains("conf_threshold")) {
+                config.conf_threshold = json_body["conf_threshold"].get<float>();
             }
-            if (json_body.has("nms_threshold")) {
-                config.nms_threshold = static_cast<float>(json_body["nms_threshold"].d());
+            if (json_body.contains("nms_threshold")) {
+                config.nms_threshold = json_body["nms_threshold"].get<float>();
             }
-            if (json_body.has("input_width")) {
-                config.input_width = json_body["input_width"].i();
+            if (json_body.contains("input_width")) {
+                config.input_width = json_body["input_width"].get<int>();
             }
-            if (json_body.has("input_height")) {
-                config.input_height = json_body["input_height"].i();
+            if (json_body.contains("input_height")) {
+                config.input_height = json_body["input_height"].get<int>();
             }
-            if (json_body.has("detection_interval")) {
-                config.detection_interval = json_body["detection_interval"].i();
+            if (json_body.contains("detection_interval")) {
+                config.detection_interval = json_body["detection_interval"].get<int>();
             }
             
             // 解析 enabled_classes
-            if (json_body.has("enabled_classes")) {
-                auto classes_array = json_body["enabled_classes"];
-                for (size_t i = 0; i < classes_array.size(); i++) {
-                    config.enabled_classes.push_back(classes_array[i].i());
+            if (json_body.contains("enabled_classes")) {
+                for (const auto& class_id : json_body["enabled_classes"]) {
+                    config.enabled_classes.push_back(class_id.get<int>());
                 }
             }
             
             // 解析 ROIs
             // 注意：如果前端传入的坐标大于1，说明是像素坐标，需要归一化
             // 否则，假设已经是归一化坐标（0-1之间）
-            if (json_body.has("rois")) {
-                auto rois_array = json_body["rois"];
+            if (json_body.contains("rois")) {
                 float ref_width = static_cast<float>(config.input_width);
                 float ref_height = static_cast<float>(config.input_height);
                 
-                for (size_t i = 0; i < rois_array.size(); i++) {
+                for (const auto& roi_json : json_body["rois"]) {
                     ROI roi;
-                    roi.id = rois_array[i].has("id") ? rois_array[i]["id"].i() : static_cast<int>(i);
-                    roi.type = (rois_array[i].has("type") && rois_array[i]["type"].s() == "POLYGON") 
+                    roi.id = roi_json.contains("id") ? roi_json["id"].get<int>() : static_cast<int>(config.rois.size());
+                    roi.type = (roi_json.contains("type") && roi_json["type"].get<std::string>() == "POLYGON") 
                                ? ROIType::POLYGON : ROIType::RECTANGLE;
-                    roi.name = rois_array[i].has("name") ? rois_array[i]["name"].s() : std::string("");
-                    roi.enabled = rois_array[i].has("enabled") ? rois_array[i]["enabled"].b() : true;
-                    if (rois_array[i].has("points")) {
-                        auto points_array = rois_array[i]["points"];
-                        for (size_t j = 0; j < points_array.size(); j++) {
+                    roi.name = roi_json.contains("name") ? roi_json["name"].get<std::string>() : std::string("");
+                    roi.enabled = roi_json.contains("enabled") ? roi_json["enabled"].get<bool>() : true;
+                    if (roi_json.contains("points")) {
+                        for (const auto& point_json : roi_json["points"]) {
                             cv::Point2f point;
-                            float x = points_array[j].has("x") ? static_cast<float>(points_array[j]["x"].d()) : 0.0f;
-                            float y = points_array[j].has("y") ? static_cast<float>(points_array[j]["y"].d()) : 0.0f;
+                            float x = point_json.contains("x") ? point_json["x"].get<float>() : 0.0f;
+                            float y = point_json.contains("y") ? point_json["y"].get<float>() : 0.0f;
                             
                             // 如果坐标大于1，假设是像素坐标，进行归一化
                             // 否则，假设已经是归一化坐标，直接使用
@@ -172,31 +176,28 @@ void setupAlgorithmConfigRoutes(crow::SimpleApp& app) {
             }
             
             // 解析 AlertRules
-            if (json_body.has("alert_rules")) {
-                auto rules_array = json_body["alert_rules"];
-                for (size_t i = 0; i < rules_array.size(); i++) {
+            if (json_body.contains("alert_rules")) {
+                for (const auto& rule_json : json_body["alert_rules"]) {
                     AlertRule rule;
-                    rule.id = rules_array[i].has("id") ? rules_array[i]["id"].i() : static_cast<int>(i);
-                    rule.name = rules_array[i].has("name") ? rules_array[i]["name"].s() : std::string("");
-                    rule.enabled = rules_array[i].has("enabled") ? rules_array[i]["enabled"].b() : true;
-                    if (rules_array[i].has("target_classes")) {
-                        auto target_classes_array = rules_array[i]["target_classes"];
-                        for (size_t j = 0; j < target_classes_array.size(); j++) {
-                            rule.target_classes.push_back(target_classes_array[j].i());
+                    rule.id = rule_json.contains("id") ? rule_json["id"].get<int>() : static_cast<int>(config.alert_rules.size());
+                    rule.name = rule_json.contains("name") ? rule_json["name"].get<std::string>() : std::string("");
+                    rule.enabled = rule_json.contains("enabled") ? rule_json["enabled"].get<bool>() : true;
+                    if (rule_json.contains("target_classes")) {
+                        for (const auto& class_id : rule_json["target_classes"]) {
+                            rule.target_classes.push_back(class_id.get<int>());
                         }
                     }
-                    rule.min_confidence = rules_array[i].has("min_confidence") 
-                                         ? static_cast<float>(rules_array[i]["min_confidence"].d()) : 0.5f;
-                    rule.min_count = rules_array[i].has("min_count") 
-                                    ? rules_array[i]["min_count"].i() : 1;
-                    rule.max_count = rules_array[i].has("max_count") 
-                                    ? rules_array[i]["max_count"].i() : 0;
-                    rule.suppression_window_seconds = rules_array[i].has("suppression_window_seconds") 
-                                                     ? rules_array[i]["suppression_window_seconds"].i() : 60;
-                    if (rules_array[i].has("roi_ids")) {
-                        auto roi_ids_array = rules_array[i]["roi_ids"];
-                        for (size_t j = 0; j < roi_ids_array.size(); j++) {
-                            rule.roi_ids.push_back(roi_ids_array[j].i());
+                    rule.min_confidence = rule_json.contains("min_confidence") 
+                                         ? rule_json["min_confidence"].get<float>() : 0.5f;
+                    rule.min_count = rule_json.contains("min_count") 
+                                    ? rule_json["min_count"].get<int>() : 1;
+                    rule.max_count = rule_json.contains("max_count") 
+                                    ? rule_json["max_count"].get<int>() : 0;
+                    rule.suppression_window_seconds = rule_json.contains("suppression_window_seconds") 
+                                                     ? rule_json["suppression_window_seconds"].get<int>() : 60;
+                    if (rule_json.contains("roi_ids")) {
+                        for (const auto& roi_id : rule_json["roi_ids"]) {
+                            rule.roi_ids.push_back(roi_id.get<int>());
                         }
                     }
                     config.alert_rules.push_back(rule);
@@ -205,49 +206,55 @@ void setupAlgorithmConfigRoutes(crow::SimpleApp& app) {
             
             auto& config_manager = AlgorithmConfigManager::getInstance();
             if (!config_manager.saveAlgorithmConfig(config)) {
-                crow::json::wvalue response;
+                nlohmann::json response;
                 response["success"] = false;
                 response["error"] = "保存配置失败";
-                return crow::response(500, response);
+                res.status = 500;
+                res.set_content(response.dump(), "application/json");
+                return;
             }
             
-            crow::json::wvalue response;
+            nlohmann::json response;
             response["success"] = true;
             response["message"] = "配置保存成功";
-            return crow::response(200, response);
+            res.status = 200;
+            res.set_content(response.dump(), "application/json");
             
         } catch (const std::exception& e) {
-            crow::json::wvalue response;
+            nlohmann::json response;
             response["success"] = false;
             response["error"] = std::string("处理请求时发生错误: ") + e.what();
-            return crow::response(500, response);
+            res.status = 500;
+            res.set_content(response.dump(), "application/json");
         }
     });
     
-    // 删除通道的算法配置（恢复默认配置）
-    CROW_ROUTE(app, "/api/algorithm-configs/<int>").methods("DELETE"_method)
-    ([](int channel_id) {
+    // 删除通道的算法配置（恢复默认配置） - DELETE
+    svr.Delete(R"(/api/algorithm-configs/(\d+))", [](const httplib::Request& req, httplib::Response& res) {
+        int channel_id = std::stoi(req.matches[1]);
         auto& config_manager = AlgorithmConfigManager::getInstance();
         
         if (!config_manager.deleteAlgorithmConfig(channel_id)) {
-            crow::json::wvalue response;
+            nlohmann::json response;
             response["success"] = false;
             response["error"] = "删除配置失败";
-            return crow::response(500, response);
+            res.status = 500;
+            res.set_content(response.dump(), "application/json");
+            return;
         }
         
-        crow::json::wvalue response;
+        nlohmann::json response;
         response["success"] = true;
         response["message"] = "配置已删除，将使用默认配置";
-        return crow::response(200, response);
+        res.status = 200;
+        res.set_content(response.dump(), "application/json");
     });
     
-    // 获取默认算法配置
-    CROW_ROUTE(app, "/api/algorithm-configs/default").methods("GET"_method)
-    ([]() {
+    // 获取默认算法配置 - GET
+    svr.Get("/api/algorithm-configs/default", [](const httplib::Request& req, httplib::Response& res) {
         AlgorithmConfig default_config = AlgorithmConfigManager::getInstance().getDefaultConfig(0);
         
-        crow::json::wvalue response;
+        nlohmann::json response;
         response["success"] = true;
         response["data"]["model_path"] = default_config.model_path;
         response["data"]["conf_threshold"] = default_config.conf_threshold;
@@ -256,9 +263,9 @@ void setupAlgorithmConfigRoutes(crow::SimpleApp& app) {
         response["data"]["input_height"] = default_config.input_height;
         response["data"]["detection_interval"] = default_config.detection_interval;
         
-        return crow::response(200, response);
+        res.status = 200;
+        res.set_content(response.dump(), "application/json");
     });
 }
 
 } // namespace detector_service
-

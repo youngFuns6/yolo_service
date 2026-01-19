@@ -6,9 +6,9 @@
 
 namespace detector_service {
 
-void setupReportConfigRoutes(httplib::Server& svr) {
+void setupReportConfigRoutes(LwsServer& svr) {
     // 获取上报配置
-    svr.Get("/api/report-config", [](const httplib::Request& req, httplib::Response& res) {
+    svr.Get("/api/report-config", [](const HttpRequest& req, HttpResponse& res) {
         auto& config_manager = ReportConfigManager::getInstance();
         const auto& config = config_manager.getReportConfig();
         
@@ -29,7 +29,7 @@ void setupReportConfigRoutes(httplib::Server& svr) {
     });
     
     // 更新上报配置
-    svr.Put("/api/report-config", [](const httplib::Request& req, httplib::Response& res) {
+    svr.Put("/api/report-config", [](const HttpRequest& req, HttpResponse& res) {
         try {
             nlohmann::json json_body;
             try {

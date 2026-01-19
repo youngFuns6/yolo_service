@@ -5,9 +5,9 @@
 
 namespace detector_service {
 
-void setupAlertRoutes(httplib::Server& svr) {
+void setupAlertRoutes(LwsServer& svr) {
     // 获取所有报警记录
-    svr.Get("/api/alerts", [](const httplib::Request& req, httplib::Response& res) {
+    svr.Get("/api/alerts", [](const HttpRequest& req, HttpResponse& res) {
         int limit = 100;
         int offset = 0;
         
@@ -52,7 +52,7 @@ void setupAlertRoutes(httplib::Server& svr) {
     });
     
     // 获取单个报警记录
-    svr.Get(R"(/api/alerts/(\d+))", [](const httplib::Request& req, httplib::Response& res) {
+    svr.Get(R"(/api/alerts/(\d+))", [](const HttpRequest& req, HttpResponse& res) {
         int alert_id = std::stoi(req.matches[1]);
         auto& alert_manager = AlertManager::getInstance();
         auto alert = alert_manager.getAlert(alert_id);
@@ -87,7 +87,7 @@ void setupAlertRoutes(httplib::Server& svr) {
     });
     
     // 获取通道的报警记录
-    svr.Get(R"(/api/channels/(\d+)/alerts)", [](const httplib::Request& req, httplib::Response& res) {
+    svr.Get(R"(/api/channels/(\d+)/alerts)", [](const HttpRequest& req, HttpResponse& res) {
         int channel_id = std::stoi(req.matches[1]);
         int limit = 100;
         int offset = 0;
@@ -133,7 +133,7 @@ void setupAlertRoutes(httplib::Server& svr) {
     });
     
     // 删除报警记录
-    svr.Delete(R"(/api/alerts/(\d+))", [](const httplib::Request& req, httplib::Response& res) {
+    svr.Delete(R"(/api/alerts/(\d+))", [](const HttpRequest& req, HttpResponse& res) {
         int alert_id = std::stoi(req.matches[1]);
         auto& alert_manager = AlertManager::getInstance();
         bool success = alert_manager.deleteAlert(alert_id);

@@ -400,15 +400,29 @@ if(NOT EXOSIP2_FOUND)
                     "export LDFLAGS=\"-L${OPENSSL_LIB_DIR} \${LDFLAGS}\"\n"
                 )
             endif()
+            # 在 macOS 上，需要链接 Security、CoreFoundation 和 CoreServices 框架
+            # Security 和 CoreFoundation 用于 TLS 证书加载
+            # CoreServices 包含 Gestalt 函数（虽然已弃用，但 exosip2 仍在使用）
+            if(CMAKE_SYSTEM_NAME STREQUAL "Darwin")
+                file(APPEND ${EXOSIP2_CONFIGURE_SCRIPT}
+                    "export LDFLAGS=\"\${LDFLAGS} -framework Security -framework CoreFoundation -framework CoreServices\"\n"
+                )
+            endif()
             if(OPENSSL_INCLUDE_DIR)
                 file(APPEND ${EXOSIP2_CONFIGURE_SCRIPT}
                     "export CPPFLAGS=\"-I${OPENSSL_INCLUDE_DIR} \${CPPFLAGS}\"\n"
                 )
             endif()
-            # 设置 LIBS，包含 OpenSSL 静态库的完整路径
-            if(OPENSSL_LIB_DIR)
+            # 在 macOS 上，不要直接指定静态库路径，而是通过 -l 选项让链接器查找
+            # 这样可以避免在构建静态库时嵌入其他静态库的问题
+            if(OPENSSL_LIB_DIR AND NOT CMAKE_SYSTEM_NAME STREQUAL "Darwin")
                 file(APPEND ${EXOSIP2_CONFIGURE_SCRIPT}
                     "export LIBS=\"${OPENSSL_LIB_DIR}/libssl.a ${OPENSSL_LIB_DIR}/libcrypto.a \${LIBS}\"\n"
+                )
+            elseif(OPENSSL_LIB_DIR AND CMAKE_SYSTEM_NAME STREQUAL "Darwin")
+                # macOS: 使用 -l 选项而不是完整路径，让链接器在 LDFLAGS 指定的目录中查找
+                file(APPEND ${EXOSIP2_CONFIGURE_SCRIPT}
+                    "export LIBS=\"-lssl -lcrypto \${LIBS}\"\n"
                 )
             endif()
             

@@ -1,6 +1,6 @@
 #pragma once
 
-#include <httplib.h>
+#include <ixwebsocket/IXWebSocket.h>
 #include <opencv2/opencv.hpp>
 #include <string>
 #include <vector>
@@ -12,6 +12,7 @@
 #include <thread>
 #include <condition_variable>
 #include <chrono>
+#include <memory>
 #include "image_utils.h"
 
 namespace detector_service {
@@ -57,11 +58,11 @@ public:
     void broadcastFrame(int channel_id, const cv::Mat& frame);
     
     // 处理 WebSocket 连接
-    void handleChannelConnection(httplib::WebSocket* conn);
-    void handleAlertConnection(httplib::WebSocket* conn);
-    void handleDisconnection(httplib::WebSocket* conn);
-    void handleChannelMessage(httplib::WebSocket* conn, const std::string& message, bool is_binary);
-    void handleAlertMessage(httplib::WebSocket* conn, const std::string& message, bool is_binary);
+    void handleChannelConnection(std::shared_ptr<ix::WebSocket> conn);
+    void handleAlertConnection(std::shared_ptr<ix::WebSocket> conn);
+    void handleDisconnection(std::shared_ptr<ix::WebSocket> conn);
+    void handleChannelMessage(std::shared_ptr<ix::WebSocket> conn, const std::string& message, bool is_binary);
+    void handleAlertMessage(std::shared_ptr<ix::WebSocket> conn, const std::string& message, bool is_binary);
 
 private:
     WebSocketHandler();
@@ -74,9 +75,9 @@ private:
     
     std::mutex connections_mutex_;
     // 存储连接和其订阅信息
-    std::map<httplib::WebSocket*, ConnectionInfo> connections_;
+    std::map<std::shared_ptr<ix::WebSocket>, ConnectionInfo> connections_;
     // 按通道ID索引的连接集合，用于快速查找
-    std::map<int, std::set<httplib::WebSocket*>> channel_subscriptions_;
+    std::map<int, std::set<std::shared_ptr<ix::WebSocket>>> channel_subscriptions_;
     
     // 帧缓冲相关
     std::condition_variable frame_queue_cv_;

@@ -8,6 +8,7 @@
 #include <chrono>
 #include <map>
 #include <vector>
+#include <nlohmann/json.hpp>
 
 namespace detector_service {
 
@@ -23,10 +24,9 @@ std::string getModelsDirectory() {
 }
 
 // 获取模型列表
-void setupModelRoutes(crow::SimpleApp& app) {
-    // 获取模型列表
-    CROW_ROUTE(app, "/api/models").methods("GET"_method)
-    ([]() {
+void setupModelRoutes(httplib::Server& svr) {
+    // 获取模型列表 - GET
+    svr.Get("/api/models", [](const httplib::Request& req, httplib::Response& res) {
         std::vector<std::map<std::string, std::string>> models;
         std::string models_dir = getModelsDirectory();
         
@@ -53,22 +53,23 @@ void setupModelRoutes(crow::SimpleApp& app) {
             std::cerr << "获取模型列表失败: " << e.what() << std::endl;
         }
         
-        crow::json::wvalue response;
+        nlohmann::json response;
         response["success"] = true;
-        crow::json::wvalue models_array;
-        for (size_t i = 0; i < models.size(); i++) {
-            models_array[i]["name"] = models[i]["name"];
-            models_array[i]["path"] = models[i]["path"];
-            models_array[i]["size"] = models[i]["size"];
-            models_array[i]["modified"] = models[i]["modified"];
+        response["data"] = nlohmann::json::array();
+        for (const auto& model : models) {
+            nlohmann::json model_json;
+            model_json["name"] = model.at("name");
+            model_json["path"] = model.at("path");
+            model_json["size"] = model.at("size");
+            model_json["modified"] = model.at("modified");
+            response["data"].push_back(model_json);
         }
-        response["data"] = std::move(models_array);
-        return crow::response(200, response);
+        res.status = 200;
+        res.set_content(response.dump(), "application/json");
     });
     
-    // 上传模型
-    CROW_ROUTE(app, "/api/models/upload").methods("POST"_method)
-    ([](const crow::request& req) {
+    // 上传模型 - POST
+    svr.Post("/api/models/upload", [](const httplib::Request& req, httplib::Response& res) {
         try {
             // 解析multipart/form-data
             auto& body = req.body;
@@ -85,31 +86,35 @@ void setupModelRoutes(crow::SimpleApp& app) {
             }
             
             if (boundary.empty()) {
-                crow::json::wvalue response;
+                nlohmann::json response;
                 response["success"] = false;
                 response["error"] = "无效的请求格式";
-                return crow::response(400, response);
+                res.status = 400;
+                res.set_content(response.dump(), "application/json");
+                return;
             }
             
             // 简化实现：直接保存文件（实际应该解析multipart）
             // 这里需要更完善的multipart解析，暂时返回错误提示
-            crow::json::wvalue response;
+            nlohmann::json response;
             response["success"] = false;
             response["error"] = "模型上传功能需要完善multipart解析";
-            return crow::response(501, response);
+            res.status = 501;
+            res.set_content(response.dump(), "application/json");
             
         } catch (const std::exception& e) {
-            crow::json::wvalue response;
+            nlohmann::json response;
             response["success"] = false;
             response["error"] = std::string("上传失败: ") + e.what();
-            return crow::response(500, response);
+            res.status = 500;
+            res.set_content(response.dump(), "application/json");
         }
     });
     
-    // 删除模型
-    CROW_ROUTE(app, "/api/models/<string>").methods("DELETE"_method)
-    ([](const std::string& model_name) {
+    // 删除模型 - DELETE
+    svr.Delete(R"(/api/models/(.+))", [](const httplib::Request& req, httplib::Response& res) {
         try {
+            std::string model_name = req.matches[1];
             std::string models_dir = getModelsDirectory();
             std::filesystem::path model_path = std::filesystem::path(models_dir) / model_name;
             
@@ -118,66 +123,75 @@ void setupModelRoutes(crow::SimpleApp& app) {
             std::filesystem::path canonical_models_dir = std::filesystem::canonical(models_dir);
             
             if (canonical_model.string().find(canonical_models_dir.string()) != 0) {
-                crow::json::wvalue response;
+                nlohmann::json response;
                 response["success"] = false;
                 response["error"] = "无效的模型路径";
-                return crow::response(400, response);
+                res.status = 400;
+                res.set_content(response.dump(), "application/json");
+                return;
             }
             
             if (!std::filesystem::exists(model_path)) {
-                crow::json::wvalue response;
+                nlohmann::json response;
                 response["success"] = false;
                 response["error"] = "模型文件不存在";
-                return crow::response(404, response);
+                res.status = 404;
+                res.set_content(response.dump(), "application/json");
+                return;
             }
             
             std::filesystem::remove(model_path);
             
-            crow::json::wvalue response;
+            nlohmann::json response;
             response["success"] = true;
             response["message"] = "模型删除成功";
-            return crow::response(200, response);
+            res.status = 200;
+            res.set_content(response.dump(), "application/json");
             
         } catch (const std::exception& e) {
-            crow::json::wvalue response;
+            nlohmann::json response;
             response["success"] = false;
             response["error"] = std::string("删除失败: ") + e.what();
-            return crow::response(500, response);
+            res.status = 500;
+            res.set_content(response.dump(), "application/json");
         }
     });
     
-    // 获取类别列表
-    CROW_ROUTE(app, "/api/models/classes").methods("GET"_method)
-    ([]() {
+    // 获取类别列表 - GET
+    svr.Get("/api/models/classes", [](const httplib::Request& req, httplib::Response& res) {
         // 创建临时检测器以获取类别列表
         try {
             YOLOv11Detector detector("yolov11n.onnx", 0.5f, 0.4f, 640, 640);
             if (!detector.initialize()) {
-                crow::json::wvalue response;
+                nlohmann::json response;
                 response["success"] = false;
                 response["error"] = "无法初始化检测器";
-                return crow::response(500, response);
+                res.status = 500;
+                res.set_content(response.dump(), "application/json");
+                return;
             }
             
             const auto& class_names = detector.getClassNames();
-            crow::json::wvalue response;
+            nlohmann::json response;
             response["success"] = true;
-            crow::json::wvalue classes_array;
+            response["data"] = nlohmann::json::array();
             for (size_t i = 0; i < class_names.size(); i++) {
-                classes_array[i]["id"] = static_cast<int>(i);
-                classes_array[i]["name"] = class_names[i];
+                nlohmann::json class_json;
+                class_json["id"] = static_cast<int>(i);
+                class_json["name"] = class_names[i];
+                response["data"].push_back(class_json);
             }
-            response["data"] = std::move(classes_array);
-            return crow::response(200, response);
+            res.status = 200;
+            res.set_content(response.dump(), "application/json");
             
         } catch (const std::exception& e) {
-            crow::json::wvalue response;
+            nlohmann::json response;
             response["success"] = false;
             response["error"] = std::string("获取类别列表失败: ") + e.what();
-            return crow::response(500, response);
+            res.status = 500;
+            res.set_content(response.dump(), "application/json");
         }
     });
 }
 
 } // namespace detector_service
-

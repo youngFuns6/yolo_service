@@ -356,6 +356,56 @@ else()
     message(FATAL_ERROR "未找到 cpp-httplib，请确保 vcpkg 已安装 cpp-httplib")
 endif()
 
+# 查找 IXWebSocket
+find_package(ixwebsocket CONFIG QUIET)
+if(NOT ixwebsocket_FOUND)
+    # 尝试在 vcpkg_installed 目录中查找
+    if(EXISTS "${CMAKE_BINARY_DIR}/vcpkg_installed")
+        file(GLOB VCPKG_TRIPLET_DIRS "${CMAKE_BINARY_DIR}/vcpkg_installed/*")
+        foreach(TRIPLET_DIR ${VCPKG_TRIPLET_DIRS})
+            if(IS_DIRECTORY "${TRIPLET_DIR}/include")
+                find_path(IXWEBSOCKET_INCLUDE_DIR ixwebsocket/IXWebSocketServer.h
+                    PATHS "${TRIPLET_DIR}/include"
+                    NO_DEFAULT_PATH
+                )
+                if(IXWEBSOCKET_INCLUDE_DIR)
+                    break()
+                endif()
+            endif()
+        endforeach()
+    endif()
+    
+    # 如果还没找到，尝试通过 CMAKE_PREFIX_PATH 查找
+    if(NOT IXWEBSOCKET_INCLUDE_DIR)
+        find_path(IXWEBSOCKET_INCLUDE_DIR ixwebsocket/IXWebSocketServer.h
+            PATHS ${CMAKE_PREFIX_PATH}
+            PATH_SUFFIXES include
+        )
+    endif()
+    
+    # 如果还没找到，尝试系统路径
+    if(NOT IXWEBSOCKET_INCLUDE_DIR)
+        find_path(IXWEBSOCKET_INCLUDE_DIR ixwebsocket/IXWebSocketServer.h)
+    endif()
+    
+    if(IXWEBSOCKET_INCLUDE_DIR)
+        message(STATUS "找到 IXWebSocket: ${IXWEBSOCKET_INCLUDE_DIR}")
+        include_directories(${IXWEBSOCKET_INCLUDE_DIR})
+        # IXWebSocket 可能需要链接系统库
+        find_library(IXWEBSOCKET_LIB ixwebsocket
+            PATHS ${CMAKE_PREFIX_PATH}
+            PATH_SUFFIXES lib
+        )
+        if(IXWEBSOCKET_LIB)
+            message(STATUS "找到 IXWebSocket 库: ${IXWEBSOCKET_LIB}")
+        endif()
+    else()
+        message(WARNING "未找到 IXWebSocket，WebSocket 功能可能不可用")
+    endif()
+else()
+    message(STATUS "找到 IXWebSocket (通过 find_package)")
+endif()
+
 # onnxruntime 仅在非 BM1684 模式下需要
 if(NOT ENABLE_BM1684)
     find_package(onnxruntime CONFIG REQUIRED)
