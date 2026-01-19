@@ -36,6 +36,7 @@ void ReportService::on_connect(struct mosquitto* mosq, void* obj, int rc) {
 // MQTT 断开连接回调函数
 void ReportService::on_disconnect(struct mosquitto* mosq, void* obj, int rc) {
     (void)mosq;  // 未使用参数
+    (void)rc;    // 未使用参数
     ReportService* service = static_cast<ReportService*>(obj);
     std::unique_lock<std::mutex> lock(service->mqtt_mutex_);
     
@@ -148,10 +149,10 @@ bool ReportService::reportViaHttp(const AlertRecord& alert, const std::string& u
         client.set_connection_timeout(5, 0);  // 5秒连接超时
         client.set_read_timeout(5, 0);       // 5秒读取超时
         
-        // 如果是 HTTPS，需要启用 SSL（注意：cpp-httplib 需要编译时启用 SSL 支持）
-        if (is_https) {
-            client.enable_server_certificate_verification(false);  // 开发环境可以禁用证书验证
-        }
+        // 如果是 HTTPS，注意：cpp-httplib 需要编译时启用 SSL 支持
+        // 如果 httplib 编译时未启用 SSL，HTTPS 请求将失败
+        // 对于开发环境，如果需要禁用证书验证，可以在编译 httplib 时配置
+        // 这里不设置证书验证相关选项，使用默认行为
         
         // 发送 POST 请求
         httplib::Headers headers = {
@@ -180,8 +181,8 @@ bool ReportService::reportViaHttp(const AlertRecord& alert, const std::string& u
 ReportService::ReportService() 
     : mqtt_client_(nullptr), current_port_(0), mqtt_initialized_(false),
       mqtt_connected_(false), mqtt_connect_failed_(false),
-      report_worker_running_(true),
-      last_reconnect_attempt_(std::chrono::steady_clock::now() - std::chrono::seconds(10)) {
+      last_reconnect_attempt_(std::chrono::steady_clock::now() - std::chrono::seconds(10)),
+      report_worker_running_(true) {
     // 初始化 mosquitto 库
     mosquitto_lib_init();
     
